@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: scrnaseq-ici-htg
+Version: 0.1.0
+Summary: Stage 1 heterogeneous graph baseline for scRNA-seq ICI response prediction
+Requires-Python: >=3.10
+Requires-Dist: anndata>=0.10
+Requires-Dist: numpy>=1.26
+Requires-Dist: scipy>=1.11
+Requires-Dist: torch>=2.2
+Requires-Dist: torch-geometric>=2.5
+Provides-Extra: test
+Requires-Dist: pytest>=8; extra == "test"
