@@ -5,6 +5,7 @@ Summary: Stage 1 heterogeneous graph baseline for scRNA-seq ICI response predict
 Requires-Python: >=3.10
 Requires-Dist: anndata>=0.10
 Requires-Dist: numpy>=1.26
+Requires-Dist: scanpy>=1.9
 Requires-Dist: scipy>=1.11
 Requires-Dist: torch>=2.2
 Requires-Dist: torch-geometric>=2.5

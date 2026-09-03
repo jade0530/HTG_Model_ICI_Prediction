@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, TypedDict
+from typing import Literal, Sequence, TypedDict
 
 import numpy as np
 import torch
 from scipy import sparse
 from torch_geometric.data import HeteroData
 
-from src.data.dataset import SampleData
+from src.data.data_loader import SampleData
+
+GeneStrategy = Literal["expressed", "hvg"]
 
 
 class GraphSummary(TypedDict):
@@ -52,16 +54,31 @@ def _selected_expression(sample: SampleData, cell_indices: np.ndarray, columns: 
     return sparse.coo_matrix(np.asarray(matrix))
 
 
+def _candidate_gene_names(sample: SampleData, gene_strategy: GeneStrategy) -> set[str] | None:
+    if gene_strategy == "expressed":
+        return None
+    if gene_strategy != "hvg":
+        raise ValueError("gene_strategy must be 'expressed' or 'hvg'")
+    hvg_names = getattr(sample, "hvg_names", ())
+    if not hvg_names:
+        raise ValueError("gene_strategy='hvg' requires sample.hvg_names")
+    return {str(name) for name in hvg_names}
+
+
 def build_local_graph(
     sample: SampleData,
     cell_indices: Sequence[int] | np.ndarray,
-    gene_universe: GeneUniverse,
+    gene_universe: GeneUniverse | None = None,
+    *,
+    gene_strategy: GeneStrategy = "hvg",
 ) -> HeteroData:
     """Build cell->gene expression edges and their exact reverse.
 
-    Only universe genes with at least one non-zero value in sampled cells become
-    local nodes. ``gene.global_id`` preserves identity across graphs. Zero-valued
-    and non-finite entries are excluded; negative processed values are rejected.
+    ``gene_strategy='expressed'`` keeps every gene with a positive value in the
+    sampled cells. ``gene_strategy='hvg'`` keeps only genes in ``sample.hvg_names``
+    that are also expressed in those cells. ``gene.global_id`` preserves identity
+    across graphs. Zero-valued and non-finite entries are excluded; negative
+    processed values are rejected.
     """
     cells = np.asarray(cell_indices, dtype=np.int64)
     if cells.ndim != 1 or len(np.unique(cells)) != len(cells):
@@ -70,15 +87,23 @@ def build_local_graph(
         raise ValueError("cannot construct a graph with no sampled cells")
     if cells.min() < 0 or cells.max() >= sample.X.shape[0]:
         raise IndexError("cell index outside sample expression matrix")
+    if gene_universe is None:
+        gene_universe = GeneUniverse(sample.gene_names)
 
+    allowed = _candidate_gene_names(sample, gene_strategy)
     sample_columns: list[int] = []
     global_ids: list[int] = []
     for column, name in enumerate(sample.gene_names):
-        global_id = gene_universe.index(str(name))
+        gene_name = str(name)
+        if allowed is not None and gene_name not in allowed:
+            continue
+        global_id = gene_universe.index(gene_name)
         if global_id is not None:
             sample_columns.append(column)
             global_ids.append(global_id)
     if not sample_columns:
+        if gene_strategy == "hvg":
+            raise ValueError("sample HVGs and gene universe have no genes in common")
         raise ValueError("sample and gene universe have no genes in common")
 
     expression = _selected_expression(sample, cells, np.asarray(sample_columns))
@@ -93,7 +118,8 @@ def build_local_graph(
 
     expressed_global_ids = np.unique(universe_columns)
     if len(expressed_global_ids) == 0:
-        raise ValueError("sampled cells have no positive expression in the gene universe")
+        target = "sample HVGs" if gene_strategy == "hvg" else "gene universe"
+        raise ValueError(f"sampled cells have no positive expression in the {target}")
     global_to_local = {int(gid): local for local, gid in enumerate(expressed_global_ids)}
     local_gene = np.fromiter(
         (global_to_local[int(gid)] for gid in universe_columns), dtype=np.int64
@@ -112,7 +138,8 @@ def build_local_graph(
     graph["gene", "expressed_by", "cell"].edge_weight = edge_weight.clone()
     graph.sample_id = str(sample.sample_id)
     graph.patient_id = str(sample.patient_id)
-    graph.y = torch.tensor([int(sample.label)], dtype=torch.float32)
+    graph.gene_strategy = gene_strategy
+    graph.y = torch.tensor([1.0 if sample.label == "R" else 0.0], dtype=torch.float32)
     return graph
 
 

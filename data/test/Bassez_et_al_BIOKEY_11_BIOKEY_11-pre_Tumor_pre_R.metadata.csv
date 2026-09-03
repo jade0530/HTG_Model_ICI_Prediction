@@ -1,0 +1,2 @@
+Cancer type,patient_id,sample_id,dataset_id,Response,Response definition,Tissue,ICI_phase,ICI treatment type,Concurrent treatment,Prior treatment,ICI treatment drug,Other treatment applied,Other drugs applied,Stage original,Stage,Grade,MSI status,days_from_treatment_start,Gender,Age,is_age_observed,n_cells
+TNBC,BIOKEY_11,BIOKEY_11::pre,Bassez_et_al,R,Pathological Evaluation,Tumor,pre,Anti-pd-1,Unknown,Unknown,pembrolizumab,Unknown,Unknown,Unknown,Unknown,Unknown,Low,Unknown,F,Unknown,Unknown,1572

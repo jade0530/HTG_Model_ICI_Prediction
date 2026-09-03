@@ -1,0 +1,14 @@
+name: htg_model
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.26
+  - scipy>=1.11
+  - anndata>=0.10
+  - scanpy>=1.9
+  - pytorch>=2.2
+  - pytest>=8
+  - pip:
+      - torch-geometric>=2.5
