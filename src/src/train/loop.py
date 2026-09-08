@@ -26,15 +26,16 @@ from src.train.dataset import (
     split_by_patient,
 )
 from src.train.metrics import classification_metrics, format_metrics
-from src.train.model import SampleGraphClassifier
+from src.train.model import Pooling, SampleGraphClassifier
 
 
 @dataclass
 class TrainConfig:
-    """Stage 1 training knobs."""
+    """Stage 1 training knobs. ``pooling`` is ``mean`` or ``attention``."""
 
     hidden_dim: int = 64
     num_cells: int = 512
+    pooling: Pooling = "mean"
     gene_strategy: GeneStrategy = "hvg"
     sampling_mode: SamplingMode = "random"
     batch_size: int = 2
@@ -291,7 +292,9 @@ def train(
         training=False,
         hvg_names=hvg_tuple or None,
     )
-    model = SampleGraphClassifier(len(gene_universe), hidden_dim=config.hidden_dim).to(device)
+    model = SampleGraphClassifier(
+        len(gene_universe), hidden_dim=config.hidden_dim, pooling=config.pooling
+    ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     pos_weight = _pos_weight(train_items, config.use_pos_weight)
     history: list[EpochResult] = []

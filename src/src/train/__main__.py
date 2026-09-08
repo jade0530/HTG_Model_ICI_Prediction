@@ -23,6 +23,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ici-phase", default="pre")
     parser.add_argument("--hidden-dim", type=int, default=64)
     parser.add_argument("--num-cells", type=int, default=256)
+    parser.add_argument("--pooling", choices=("mean", "attention"), default="mean")
     parser.add_argument("--gene-strategy", choices=("hvg", "expressed"), default="hvg")
     parser.add_argument("--sampling-mode", choices=("random", "proportional"), default="random")
     parser.add_argument("--batch-size", type=int, default=2)
@@ -54,6 +55,7 @@ def main(argv: list[str] | None = None) -> None:
         config=TrainConfig(
             hidden_dim=args.hidden_dim,
             num_cells=args.num_cells,
+            pooling=args.pooling,
             gene_strategy=args.gene_strategy,
             sampling_mode=args.sampling_mode,
             batch_size=args.batch_size,

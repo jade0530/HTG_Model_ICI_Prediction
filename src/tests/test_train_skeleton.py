@@ -224,7 +224,97 @@ def test_cli_parse_defaults():
     args = parse_args([])
     assert args.gene_strategy == "hvg"
     assert args.sampling_mode == "random"
+    assert args.pooling == "mean"
     assert args.test_fraction == 0.0
+
+
+def test_attention_pool_normalises_per_graph():
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    import torch
+    from torch_geometric.nn.pool import global_add_pool
+    from torch_geometric.utils import softmax
+
+    from src.train.model import CellAttentionPool
+
+    pool = CellAttentionPool(4)
+    x = torch.randn(5, 4)
+    batch = torch.tensor([0, 0, 0, 1, 1])
+    pooled, weights = pool(x, batch)
+    assert pooled.shape == (2, 4)
+    assert weights.shape == (5,)
+    mass = global_add_pool(weights.unsqueeze(-1), batch).reshape(-1)
+    assert torch.allclose(mass, torch.ones(2), atol=1e-6)
+    scores = pool.gate(x).squeeze(-1)
+    assert torch.allclose(weights, softmax(scores, batch))
+
+
+def test_attention_pool_is_not_uniform_mean():
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    import torch
+
+    from src.train.model import CellAttentionPool
+
+    pool = CellAttentionPool(2)
+    with torch.no_grad():
+        for param in pool.parameters():
+            param.zero_()
+        pool.gate[0].weight[0, 0] = 1.0
+        pool.gate[2].weight[0, 0] = 5.0
+    x = torch.tensor([[2.0, 0.0], [0.0, 0.0], [-2.0, 0.0]])
+    batch = torch.zeros(3, dtype=torch.long)
+    pooled, weights = pool(x, batch)
+    assert weights[0] > weights[1] > weights[2]
+    assert not torch.allclose(pooled.squeeze(0), x.mean(0))
+
+
+def test_classifier_attention_pooling_returns_one_logit():
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    import torch
+
+    from src.graph.build_local_graph import build_local_graph
+    from src.train.model import SampleGraphClassifier
+
+    sample = _toy_sample("S1", "P1", "R", 1)
+    graph = build_local_graph(
+        sample, [0, 1, 2], GeneUniverse(["G1", "G2", "G3", "G4"]), gene_strategy="hvg"
+    )
+    model = SampleGraphClassifier(4, hidden_dim=8, pooling="attention")
+    logit = model(graph)
+    assert logit.shape == (1,)
+    cell_x, batch = model.encode_cells(graph)
+    _, weights = model.pool_cells(cell_x, batch)
+    assert weights is not None
+    assert torch.isclose(weights.sum(), torch.tensor(1.0), atol=1e-6)
+
+
+def test_fit_runs_with_attention_pooling():
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    samples = [
+        _toy_sample("S1", "P1", "R", 1),
+        _toy_sample("S2", "P2", "R", 2),
+        _toy_sample("S3", "P3", "NR", 3),
+        _toy_sample("S4", "P4", "NR", 4),
+    ]
+    history = fit(
+        samples,
+        GeneUniverse(["G1", "G2", "G3", "G4"]),
+        config=TrainConfig(
+            hidden_dim=8,
+            num_cells=4,
+            pooling="attention",
+            batch_size=2,
+            epochs=1,
+            val_fraction=0.5,
+            seed=0,
+        ),
+        log=False,
+    )
+    assert len(history) == 1
+    assert "loss" in history[0].train
 
 
 def test_fit_runs_one_epoch_and_reports_metrics():

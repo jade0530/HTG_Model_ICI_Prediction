@@ -8,9 +8,11 @@ from .dataset import (
 )
 from .loop import TrainConfig, TrainResult, evaluate, fit, run_epoch, train
 from .metrics import classification_metrics
-from .model import SampleGraphClassifier
+from .model import CellAttentionPool, Pooling, SampleGraphClassifier
 
 __all__ = [
+    "CellAttentionPool",
+    "Pooling",
     "SampleGraphClassifier",
     "SampleGraphDataset",
     "SampleRecord",
