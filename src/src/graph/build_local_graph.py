@@ -1,4 +1,4 @@
-"""Construct the minimal Stage 1 cell-gene heterogeneous graph."""
+"""Minimal Stage 1 cell-gene heterogeneous graph."""
 
 from __future__ import annotations
 
@@ -33,10 +33,8 @@ class GeneUniverse:
 
     def __init__(self, names: Sequence[str]) -> None:
         clean = tuple(str(name) for name in names)
-        if not clean:
-            raise ValueError("gene universe cannot be empty")
-        if len(set(clean)) != len(clean):
-            raise ValueError("gene universe names must be unique")
+        if not clean or len(set(clean)) != len(clean):
+            raise ValueError("gene universe names must be unique and non-empty")
         object.__setattr__(self, "names", clean)
         object.__setattr__(self, "_index", {name: i for i, name in enumerate(clean)})
 
@@ -59,10 +57,9 @@ def _candidate_gene_names(sample: SampleData, gene_strategy: GeneStrategy) -> se
         return None
     if gene_strategy != "hvg":
         raise ValueError("gene_strategy must be 'expressed' or 'hvg'")
-    hvg_names = getattr(sample, "hvg_names", ())
-    if not hvg_names:
+    if not sample.hvg_names:
         raise ValueError("gene_strategy='hvg' requires sample.hvg_names")
-    return {str(name) for name in hvg_names}
+    return {str(name) for name in sample.hvg_names}
 
 
 def build_local_graph(
@@ -74,17 +71,13 @@ def build_local_graph(
 ) -> HeteroData:
     """Build cell->gene expression edges and their exact reverse.
 
-    ``gene_strategy='expressed'`` keeps every gene with a positive value in the
-    sampled cells. ``gene_strategy='hvg'`` keeps only genes in ``sample.hvg_names``
-    that are also expressed in those cells. ``gene.global_id`` preserves identity
-    across graphs. Zero-valued and non-finite entries are excluded; negative
-    processed values are rejected.
+    ``expressed`` keeps every gene with a positive value in the sampled cells.
+    ``hvg`` keeps sample HVGs that are also expressed. ``gene.global_id`` is
+    stable across graphs. Zero/non-finite entries are dropped; negatives raise.
     """
     cells = np.asarray(cell_indices, dtype=np.int64)
-    if cells.ndim != 1 or len(np.unique(cells)) != len(cells):
-        raise ValueError("cell_indices must be a one-dimensional set of unique indices")
-    if len(cells) == 0:
-        raise ValueError("cannot construct a graph with no sampled cells")
+    if cells.ndim != 1 or len(cells) == 0 or len(np.unique(cells)) != len(cells):
+        raise ValueError("cell_indices must be a unique one-dimensional index array")
     if cells.min() < 0 or cells.max() >= sample.X.shape[0]:
         raise IndexError("cell index outside sample expression matrix")
     if gene_universe is None:
@@ -102,9 +95,8 @@ def build_local_graph(
             sample_columns.append(column)
             global_ids.append(global_id)
     if not sample_columns:
-        if gene_strategy == "hvg":
-            raise ValueError("sample HVGs and gene universe have no genes in common")
-        raise ValueError("sample and gene universe have no genes in common")
+        target = "sample HVGs" if gene_strategy == "hvg" else "gene universe"
+        raise ValueError(f"sample and {target} have no genes in common")
 
     expression = _selected_expression(sample, cells, np.asarray(sample_columns))
     expression.sum_duplicates()
@@ -115,11 +107,11 @@ def build_local_graph(
     rows = expression.row[keep]
     universe_columns = np.asarray(global_ids, dtype=np.int64)[expression.col[keep]]
     weights = expression.data[keep].astype(np.float32, copy=False)
-
     expressed_global_ids = np.unique(universe_columns)
     if len(expressed_global_ids) == 0:
         target = "sample HVGs" if gene_strategy == "hvg" else "gene universe"
         raise ValueError(f"sampled cells have no positive expression in the {target}")
+
     global_to_local = {int(gid): local for local, gid in enumerate(expressed_global_ids)}
     local_gene = np.fromiter(
         (global_to_local[int(gid)] for gid in universe_columns), dtype=np.int64
@@ -144,7 +136,7 @@ def build_local_graph(
 
 
 def summarize_local_graph(graph: HeteroData) -> GraphSummary:
-    """Return Stage 1 structural and memory diagnostics for one local graph."""
+    """Structural and memory diagnostics for one local graph."""
     relation = graph["cell", "expresses", "gene"]
     num_cells = int(graph["cell"].num_nodes)
     num_genes = int(graph["gene"].num_nodes)

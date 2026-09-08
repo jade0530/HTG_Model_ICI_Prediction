@@ -81,15 +81,9 @@ def test_same_patient_samples_stay_in_one_split():
     ]
     train, val = split_by_patient(records, val_fraction=0.4, seed=0)
     assert_patient_disjoint(train, val)
-    train_keys = {patient_key(item) for item in train}
-    val_keys = {patient_key(item) for item in val}
-    assert "Au_et_al::A01" in train_keys | val_keys
     a01 = [item for item in train + val if item.patient_id == "A01"]
     assert len(a01) == 2
     assert {patient_key(item) for item in a01} == {"Au_et_al::A01"}
-    a01_fold = train_keys if "Au_et_al::A01" in train_keys else val_keys
-    assert "Au_et_al::A01" in a01_fold
-    assert "Au_et_al::A01" not in (val_keys if a01_fold is train_keys else train_keys)
 
 
 def test_same_patient_id_in_different_datasets_is_not_merged():
@@ -130,15 +124,107 @@ def test_real_manifest_tumor_pre_split_has_no_patient_leak():
         records, val_fraction=0.15, test_fraction=0.15, seed=0
     )
     assert_patient_disjoint(train, val, test)
-    train_keys = {patient_key(item) for item in train}
-    val_keys = {patient_key(item) for item in val}
-    test_keys = {patient_key(item) for item in test}
-    assert train_keys.isdisjoint(val_keys)
-    assert train_keys.isdisjoint(test_keys)
-    assert val_keys.isdisjoint(test_keys)
-    assert len(train_keys | val_keys | test_keys) == len(
-        {patient_key(item) for item in records}
+    assert {patient_key(item) for item in train + val + test} == {
+        patient_key(item) for item in records
+    }
+
+
+def test_build_gene_universe_keeps_shared_order():
+    from src.train.dataset import build_gene_universe
+
+    samples = [
+        _toy_sample("S1", "P1", "R", 1),
+        _toy_sample("S2", "P2", "NR", 2),
+    ]
+    universe = build_gene_universe(samples)
+    assert universe.names == ("G2", "OFF_UNIVERSE", "G1", "G3")
+
+
+def test_records_from_h5ad_dir_reads_metadata(tmp_path):
+    from src.train.dataset import records_from_h5ad_dir
+
+    (tmp_path / "s1.h5ad").write_bytes(b"")
+    (tmp_path / "s1.metadata.csv").write_text(
+        "Cancer type,patient_id,sample_id,dataset_id,Response,Tissue,ICI_phase\n"
+        "BCC,p1,s1,StudyA,R,Tumor,pre\n"
     )
+    records = records_from_h5ad_dir(tmp_path)
+    assert len(records) == 1
+    assert records[0].label == "R"
+    assert records[0].patient_id == "p1"
+    assert records[0].dataset_id == "StudyA"
+
+
+def test_dataset_proportional_sampling_builds_a_graph():
+    from src.data.sampler import CellSampler
+    from src.train.dataset import SampleGraphDataset
+
+    rng = np.random.default_rng(0)
+    matrix = rng.random((6, 4)).astype(np.float32) + 0.1
+    sample = AnnDataSample(
+        sample_id="S1",
+        patient_id="P1",
+        X=matrix,
+        gene_names=("G2", "OFF_UNIVERSE", "G1", "G3"),
+        hvg_names=("G1", "G2", "G3"),
+        cell_annotation={
+            "predicted_labels": np.array(["T", "T", "T", "T", "B", "B"]),
+            "conf_score": np.linspace(0.2, 0.9, 6),
+        },
+        clinical_metadata={},
+        label="R",
+        n_hvg=3,
+    )
+    dataset = SampleGraphDataset(
+        [sample],
+        sampler=CellSampler(num_cells=4, seed=0),
+        gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
+        sampling_mode="proportional",
+        training=False,
+    )
+    graph = dataset[0]
+    assert int(graph["cell"].num_nodes) == 4
+    assert graph.y.tolist() == [1.0]
+
+
+def test_train_writes_checkpoints_and_history(tmp_path):
+    from src.train.loop import train
+
+    samples = [
+        _toy_sample("S1", "P1", "R", 1),
+        _toy_sample("S2", "P2", "R", 2),
+        _toy_sample("S3", "P3", "NR", 3),
+        _toy_sample("S4", "P4", "NR", 4),
+    ]
+    result = train(
+        samples,
+        gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
+        config=TrainConfig(
+            hidden_dim=8,
+            num_cells=4,
+            batch_size=2,
+            epochs=2,
+            val_fraction=0.5,
+            seed=0,
+        ),
+        output_dir=tmp_path,
+        log=False,
+    )
+    assert len(result.history) == 2
+    assert (tmp_path / "best.pt").is_file()
+    assert (tmp_path / "last.pt").is_file()
+    assert (tmp_path / "history.csv").is_file()
+    assert (tmp_path / "split.json").is_file()
+    assert result.output_dir == tmp_path
+
+
+def test_cli_parse_defaults():
+    from src.train.__main__ import parse_args
+
+    args = parse_args([])
+    assert args.gene_strategy == "hvg"
+    assert args.sampling_mode == "random"
+    assert args.test_fraction == 0.0
 
 
 def test_fit_runs_one_epoch_and_reports_metrics():

@@ -1,0 +1,16 @@
+file,sample_id,label,n_cells,n_high_types,top_high_type,top_high_n,top_high_frac,mean_conf
+Bassez_et_al_BIOKEY_10_BIOKEY_10-pre_Tumor_pre_R.h5ad,BIOKEY_10::pre,R,4643,21,T cells,1518,0.3269,0.6536
+Bassez_et_al_BIOKEY_11_BIOKEY_11-pre_Tumor_pre_R.h5ad,BIOKEY_11::pre,R,1572,16,T cells,718,0.4567,0.7542
+Bassez_et_al_BIOKEY_12_BIOKEY_12-pre_Tumor_pre_R.h5ad,BIOKEY_12::pre,R,5877,19,T cells,2982,0.5074,0.7721
+Bassez_et_al_BIOKEY_14_BIOKEY_14-pre_Tumor_pre_NR.h5ad,BIOKEY_14::pre,NR,3185,17,T cells,1242,0.3900,0.8272
+Bassez_et_al_BIOKEY_15_BIOKEY_15-pre_Tumor_pre_R.h5ad,BIOKEY_15::pre,R,3748,19,T cells,1377,0.3674,0.7965
+Bassez_et_al_BIOKEY_5_BIOKEY_5-pre_Tumor_pre_R.h5ad,BIOKEY_5::pre,R,3121,15,T cells,1988,0.6370,0.9495
+Bassez_et_al_BIOKEY_6_BIOKEY_6-pre_Tumor_pre_NR.h5ad,BIOKEY_6::pre,NR,5347,20,Epithelial cells,1486,0.2779,0.5929
+Bassez_et_al_BIOKEY_7_BIOKEY_7-pre_Tumor_pre_NR.h5ad,BIOKEY_7::pre,NR,811,14,Epithelial cells,472,0.5820,0.7146
+Bassez_et_al_BIOKEY_8_BIOKEY_8-pre_Tumor_pre_NR.h5ad,BIOKEY_8::pre,NR,365,13,T cells,171,0.4685,0.8750
+Bassez_et_al_BIOKEY_9_BIOKEY_9-pre_Tumor_pre_NR.h5ad,BIOKEY_9::pre,NR,3147,20,B cells,1017,0.3232,0.6003
+franken_et_al_5_10X_HEN061_Tumor_pre_NR.h5ad,10X_HEN061,NR,13185,23,Macrophages,3014,0.2286,0.8206
+franken_et_al_6_10X_HEN074_Tumor_pre_NR.h5ad,10X_HEN074,NR,25300,27,T cells,10996,0.4346,0.8902
+franken_et_al_7_10X_HEN004_Tumor_pre_R.h5ad,10X_HEN004,R,3893,18,T cells,1432,0.3678,0.9041
+franken_et_al_8_10X_HEN079_Tumor_pre_R.h5ad,10X_HEN079,R,19655,23,T cells,7884,0.4011,0.8499
+franken_et_al_9_10X_HEN027_Tumor_pre_R.h5ad,10X_HEN027,R,6106,21,T cells,2030,0.3325,0.7632

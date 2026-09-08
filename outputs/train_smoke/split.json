@@ -1,0 +1,82 @@
+{
+  "train": [
+    {
+      "sample_id": "BIOKEY_10::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_10",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_15::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_15",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_8::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_8",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_5::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_5",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_9::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_9",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_11::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_11",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_7::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_7",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_6::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_6",
+      "label": "NR"
+    },
+    {
+      "sample_id": "10X_HEN004",
+      "patient_key": "franken_et_al::7",
+      "label": "R"
+    },
+    {
+      "sample_id": "10X_HEN079",
+      "patient_key": "franken_et_al::8",
+      "label": "R"
+    },
+    {
+      "sample_id": "10X_HEN027",
+      "patient_key": "franken_et_al::9",
+      "label": "R"
+    }
+  ],
+  "val": [
+    {
+      "sample_id": "BIOKEY_14::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_14",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_12::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_12",
+      "label": "R"
+    },
+    {
+      "sample_id": "10X_HEN061",
+      "patient_key": "franken_et_al::5",
+      "label": "NR"
+    },
+    {
+      "sample_id": "10X_HEN074",
+      "patient_key": "franken_et_al::6",
+      "label": "NR"
+    }
+  ],
+  "test": []
+}

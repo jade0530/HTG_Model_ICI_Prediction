@@ -1,0 +1,18 @@
+{
+  "hidden_dim": 16,
+  "num_cells": 64,
+  "gene_strategy": "hvg",
+  "sampling_mode": "random",
+  "batch_size": 2,
+  "epochs": 1,
+  "lr": 0.001,
+  "val_fraction": 0.3,
+  "test_fraction": 0.0,
+  "n_hvg": 100,
+  "hvg_cells_per_sample": 32,
+  "cache_samples": true,
+  "use_pos_weight": true,
+  "seed": 0,
+  "device": "auto",
+  "threshold": 0.5
+}

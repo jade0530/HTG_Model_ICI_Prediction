@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import zlib
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
@@ -13,6 +12,14 @@ from .data_loader import CELL_ANNOTATION_KEYS
 
 @dataclass(frozen=True)
 class CellSampler:
+    """Sample cells for a local graph.
+
+    Random and proportional draws use ``num_cells``. Per-type graphs
+    (``sample_by_cell_type`` / ``sample_all_cell_types``) keep every cell of
+    that type. Pass ``annotation_keys=MAIN_CELL_TYPE_KEYS`` to group by
+    Immune_All_High labels.
+    """
+
     num_cells: int = 512
     seed: int = 0
 
@@ -28,16 +35,14 @@ class CellSampler:
         view_index: int = 0,
         rng: np.random.Generator | None = None,
     ) -> np.ndarray:
-        """Return a random subsample of cells, ignoring cell type.
-
-        Training uses the supplied stateful RNG (or a fresh RNG). Validation uses a
-        seed derived from ``seed`` and ``view_index``, so each view is repeatable.
-        Samples smaller than the requested size are returned whole.
-        """
-        take, generator = self._prepare(
-            available_cells, training=training, view_index=view_index, rng=rng
+        """Random subsample, ignoring cell type. Small samples are returned whole."""
+        take = min(self.num_cells, available_cells)
+        generator = self._rng(training=training, view_index=view_index, rng=rng)
+        if take == available_cells:
+            return np.arange(available_cells, dtype=np.int64)
+        return np.sort(generator.choice(available_cells, size=take, replace=False)).astype(
+            np.int64, copy=False
         )
-        return _sample_random(available_cells, take, generator)
 
     def sample_by_cell_type(
         self,
@@ -48,25 +53,20 @@ class CellSampler:
         cell_annotation: Mapping[str, Sequence[object]],
         view_index: int = 0,
         rng: np.random.Generator | None = None,
+        annotation_keys: tuple[str, str] = CELL_ANNOTATION_KEYS,
     ) -> np.ndarray:
-        """Return cells of one predicted label for a cell-type-specific local graph.
+        """Return every cell of one label. ``num_cells`` is not applied.
 
-        Draws without replacement from cells whose ``predicted_labels`` match
-        ``cell_type``, weighted by ``conf_score``. Types smaller than ``num_cells``
-        are returned whole.
+        ``training`` / ``view_index`` / ``rng`` match ``sample()`` so callers
+        can share a call pattern; they are unused because this path is exhaustive.
         """
-        labels, scores = _annotation_columns(cell_annotation, available_cells)
+        labels, _ = _annotation_columns(
+            cell_annotation, available_cells, annotation_keys=annotation_keys
+        )
         members = np.flatnonzero(labels.astype(str) == str(cell_type))
         if members.size == 0:
-            raise ValueError(f"no cells with predicted_labels={cell_type!r}")
-        take, generator = self._prepare(
-            int(members.size),
-            training=training,
-            view_index=view_index,
-            rng=rng,
-            cell_type=str(cell_type),
-        )
-        return np.sort(_sample_group(members, scores[members], take, generator))
+            raise ValueError(f"no cells with {annotation_keys[0]}={cell_type!r}")
+        return members.astype(np.int64, copy=False)
 
     def sample_all_cell_types(
         self,
@@ -76,20 +76,19 @@ class CellSampler:
         cell_annotation: Mapping[str, Sequence[object]],
         view_index: int = 0,
         rng: np.random.Generator | None = None,
+        annotation_keys: tuple[str, str] = CELL_ANNOTATION_KEYS,
     ) -> dict[str, np.ndarray]:
-        """Return one subsample per predicted label, each for its own local graph."""
-        labels, _ = _annotation_columns(cell_annotation, available_cells)
-        types = [str(name) for name in np.unique(labels.astype(str))]
+        """Return every cell of each label, one index array per type.
+
+        ``training`` / ``view_index`` / ``rng`` match ``sample()`` and are unused.
+        """
+        labels, _ = _annotation_columns(
+            cell_annotation, available_cells, annotation_keys=annotation_keys
+        )
+        labels = labels.astype(str)
         return {
-            cell_type: self.sample_by_cell_type(
-                available_cells,
-                cell_type=cell_type,
-                training=training,
-                cell_annotation=cell_annotation,
-                view_index=view_index,
-                rng=rng,
-            )
-            for cell_type in types
+            cell_type: np.flatnonzero(labels == cell_type).astype(np.int64, copy=False)
+            for cell_type in np.unique(labels)
         }
 
     def cell_type_proportional_sample(
@@ -100,104 +99,64 @@ class CellSampler:
         cell_annotation: Mapping[str, Sequence[object]],
         view_index: int = 0,
         rng: np.random.Generator | None = None,
+        annotation_keys: tuple[str, str] = CELL_ANNOTATION_KEYS,
     ) -> np.ndarray:
-        """Return a mixed subsample that preserves cell-type frequencies.
+        """Mixed subsample that preserves label frequencies.
 
-        Allocates ``num_cells`` across ``predicted_labels`` in proportion to type
-        counts, then draws within each type using ``conf_score`` as weights.
+        Allocates ``num_cells`` across types, then draws within each type
+        using confidence scores as weights.
         """
-        take, generator = self._prepare(
-            available_cells, training=training, view_index=view_index, rng=rng
+        take = min(self.num_cells, available_cells)
+        generator = self._rng(training=training, view_index=view_index, rng=rng)
+        labels, scores = _annotation_columns(
+            cell_annotation, available_cells, annotation_keys=annotation_keys
         )
-        labels, scores = _annotation_columns(cell_annotation, available_cells)
         if take == available_cells:
             return np.arange(available_cells, dtype=np.int64)
         _, inverse, counts = np.unique(labels, return_inverse=True, return_counts=True)
         quotas = _proportional_quotas(counts, take)
-        chosen: list[np.ndarray] = []
+        chosen = []
         for type_index, quota in enumerate(quotas):
             if quota == 0:
                 continue
             members = np.flatnonzero(inverse == type_index)
             chosen.append(_sample_group(members, scores[members], int(quota), generator))
-        if not chosen:
-            raise ValueError("cell-type sampling produced no cells")
         return np.sort(np.concatenate(chosen)).astype(np.int64, copy=False)
 
-    def _prepare(
-        self,
-        available_cells: int,
-        *,
-        training: bool,
-        view_index: int,
-        rng: np.random.Generator | None,
-        cell_type: str | None = None,
-    ) -> tuple[int, np.random.Generator]:
-        if available_cells < 0:
-            raise ValueError("available_cells cannot be negative")
-        take = min(self.num_cells, available_cells)
-        return take, self._generator(
-            training=training, view_index=view_index, rng=rng, cell_type=cell_type
-        )
-
-    def _generator(
+    def _rng(
         self,
         *,
         training: bool,
         view_index: int,
         rng: np.random.Generator | None,
-        cell_type: str | None = None,
     ) -> np.random.Generator:
-        if training and rng is not None:
-            return rng
         if training:
-            return np.random.default_rng()
-        if cell_type is None:
-            return np.random.default_rng(self.seed + view_index)
-        return np.random.default_rng(
-            [self.seed, view_index, zlib.adler32(cell_type.encode("utf-8"))]
-        )
+            return rng if rng is not None else np.random.default_rng()
+        return np.random.default_rng(self.seed + view_index)
 
 
 def _annotation_columns(
-    cell_annotation: Mapping[str, Sequence[object]] | None,
+    cell_annotation: Mapping[str, Sequence[object]],
     available_cells: int,
+    *,
+    annotation_keys: tuple[str, str] = CELL_ANNOTATION_KEYS,
 ) -> tuple[np.ndarray, np.ndarray]:
-    if cell_annotation is None:
-        raise ValueError("cell-type sampling requires cell_annotation")
-    missing = [key for key in CELL_ANNOTATION_KEYS if key not in cell_annotation]
+    label_key, score_key = annotation_keys
+    missing = [key for key in annotation_keys if key not in cell_annotation]
     if missing:
         raise ValueError(
-            "cell-type sampling requires 'predicted_labels' and 'conf_score'; "
-            f"missing {missing}"
+            "cell-type sampling requires "
+            f"{label_key!r} and {score_key!r}; missing {missing}"
         )
-    labels = np.asarray(cell_annotation["predicted_labels"])
-    scores = np.asarray(cell_annotation["conf_score"], dtype=np.float64)
+    labels = np.asarray(cell_annotation[label_key])
+    scores = np.asarray(cell_annotation[score_key], dtype=np.float64)
     if labels.shape[0] != available_cells or scores.shape[0] != available_cells:
         raise ValueError("cell annotation length must match available_cells")
     return labels, scores
 
 
-def _sample_random(
-    available_cells: int,
-    take: int,
-    generator: np.random.Generator,
-) -> np.ndarray:
-    if take == 0:
-        return np.arange(0, dtype=np.int64)
-    if take == available_cells:
-        return np.arange(available_cells, dtype=np.int64)
-    return np.sort(generator.choice(available_cells, size=take, replace=False)).astype(
-        np.int64, copy=False
-    )
-
-
 def _proportional_quotas(counts: np.ndarray, take: int) -> np.ndarray:
-    total = int(counts.sum())
-    take = min(int(take), total)
-    if take == total:
-        return counts.astype(np.int64, copy=True)
-    raw = take * counts / total
+    raw = take * counts / counts.sum()
     quotas = np.minimum(counts, np.floor(raw)).astype(np.int64)
     leftover = take - int(quotas.sum())
     remainder = raw - np.floor(raw)
@@ -207,14 +166,6 @@ def _proportional_quotas(counts: np.ndarray, take: int) -> np.ndarray:
         if quotas[index] < counts[index]:
             quotas[index] += 1
             leftover -= 1
-    if leftover > 0:
-        spare = np.flatnonzero(counts - quotas)
-        for index in spare:
-            extra = min(leftover, int(counts[index] - quotas[index]))
-            quotas[index] += extra
-            leftover -= extra
-            if leftover == 0:
-                break
     return quotas
 
 
@@ -226,7 +177,7 @@ def _sample_group(
 ) -> np.ndarray:
     if quota >= len(members):
         return members.astype(np.int64, copy=False)
-    weights = np.where(np.isfinite(scores), np.clip(scores, 0.0, None), 0.0)
+    weights = np.clip(np.nan_to_num(scores, nan=0.0), 0.0, None)
     total = float(weights.sum())
     probabilities = None if total <= 0 else weights / total
     return generator.choice(members, size=quota, replace=False, p=probabilities).astype(

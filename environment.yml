@@ -12,3 +12,4 @@ dependencies:
   - pytest>=8
   - pip:
       - torch-geometric>=2.5
+      - celltypist>=1.6

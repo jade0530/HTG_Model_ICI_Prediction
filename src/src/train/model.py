@@ -18,10 +18,6 @@ class SampleGraphClassifier(nn.Module):
 
     def __init__(self, num_genes: int, hidden_dim: int = 64) -> None:
         super().__init__()
-        if num_genes <= 0:
-            raise ValueError("num_genes must be positive")
-        if hidden_dim <= 0:
-            raise ValueError("hidden_dim must be positive")
         self.gene_emb = nn.Embedding(num_genes, hidden_dim)
         self.cell_lin = nn.Linear(hidden_dim, hidden_dim)
         self.head = nn.Sequential(

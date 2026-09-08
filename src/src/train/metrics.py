@@ -17,8 +17,6 @@ def classification_metrics(
     """Return accuracy, AUPRC, and F1 for binary labels ``{0, 1}``."""
     y_true = np.asarray(y_true).reshape(-1)
     y_prob = np.asarray(y_prob, dtype=np.float64).reshape(-1)
-    if y_true.size == 0:
-        raise ValueError("cannot compute metrics on an empty prediction set")
     y_pred = (y_prob >= threshold).astype(np.int64)
     y_int = y_true.astype(np.int64)
     metrics: dict[str, float] = {

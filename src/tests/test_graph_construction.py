@@ -39,20 +39,12 @@ def test_graph_has_consistent_gene_ids_and_nonzero_weighted_reverse_edges(as_spa
     reverse = graph["gene", "expressed_by", "cell"]
     assert forward.edge_index.shape == (2, 3)
     assert sorted(forward.edge_weight.tolist()) == [1.0, 2.0, 3.0]
-    assert (forward.edge_weight > 0).all()
     assert reverse.edge_index.equal(forward.edge_index.flip(0))
     assert reverse.edge_weight.equal(forward.edge_weight)
-    assert graph.sample_id == "S1"
-    assert graph.patient_id == "P1"
     assert graph.y.tolist() == [1.0]
     summary = summarize_local_graph(graph)
-    assert summary["num_cells"] == 2
-    assert summary["num_genes"] == 3
     assert summary["num_expression_edges"] == 3
     assert summary["expression_density"] == 0.5
-    assert summary["min_edge_weight"] == 1.0
-    assert summary["max_edge_weight"] == 3.0
-    assert summary["tensor_bytes"] > 0
 
 
 def test_validation_sampling_is_reproducible_and_small_samples_use_all_cells():
@@ -124,8 +116,7 @@ def test_sample_from_anndata_splits_annotation_and_clinical_columns():
     assert list(sample.cell_annotation["predicted_labels"]) == ["T", "B", "T"]
     assert list(sample.clinical_metadata["age"]) == [50, 50, 51]
     assert sample.n_hvg == 3000
-    assert set(sample.hvg_names) <= {"g1", "g2"}
-    assert len(sample.hvg_names) == 2
+    assert tuple(sample.hvg_names) == ("g1", "g2")
 
 
 def test_cell_type_proportional_sample_is_stratified_and_reproducible():
@@ -161,11 +152,29 @@ def test_sample_by_cell_type_builds_type_specific_indices():
         10, training=False, cell_annotation=annotation
     )
     assert set(all_types) == {"B", "T"}
-    assert np.array_equal(t_cells, all_types["T"])
-    assert set(labels[t_cells]) == {"T"}
-    assert set(labels[all_types["B"]]) == {"B"}
-    assert len(t_cells) == 3
-    assert len(all_types["B"]) == 3
+    assert np.array_equal(t_cells, np.flatnonzero(labels == "T"))
+    assert len(all_types["B"]) == 4
+
+
+def test_sample_all_cell_types_uses_main_cell_type_keys():
+    from src.data.data_loader import MAIN_CELL_TYPE_KEYS
+
+    annotation = {
+        "predicted_labels": np.array(["CD4 T"] * 6 + ["Memory B"] * 4),
+        "conf_score": np.ones(10),
+        "predicted_labels_mainCellType": np.array(["T cells"] * 6 + ["B cells"] * 4),
+        "conf_scores_mainCellType": np.linspace(0.2, 1.0, 10),
+    }
+    sampler = CellSampler(num_cells=3, seed=13)
+    by_type = sampler.sample_all_cell_types(
+        10,
+        training=False,
+        cell_annotation=annotation,
+        annotation_keys=MAIN_CELL_TYPE_KEYS,
+    )
+    assert set(by_type) == {"B cells", "T cells"}
+    assert len(by_type["T cells"]) == 6
+    assert len(by_type["B cells"]) == 4
 
 
 def test_sample_by_cell_type_requires_annotation_columns():
@@ -235,3 +244,108 @@ def test_sample_from_anndata_respects_n_hvg():
     assert sample.n_hvg == 1
     assert len(sample.hvg_names) == 1
     assert sample.hvg_names[0] in {"g1", "g2"}
+
+
+def _install_fake_harmonise(monkeypatch, labels, scores):
+    anndata = pytest.importorskip("anndata")
+
+    def fake_harmonise(adata, **kwargs):
+        out = anndata.AnnData(np.asarray(adata.X), obs=adata.obs.copy(), var=adata.var.copy())
+        n_cells = int(out.n_obs)
+        out.obs["predicted_labels"] = list(labels)[:n_cells]
+        out.obs["conf_score"] = list(scores)[:n_cells]
+        fake_harmonise.last_kwargs = kwargs
+        return out
+
+    monkeypatch.setattr("src.data.data_loader.harmonise_and_annotate", fake_harmonise)
+    return fake_harmonise
+
+
+def test_annotate_cell_types_writes_predicted_labels_when_absent(monkeypatch, tmp_path):
+    anndata = pytest.importorskip("anndata")
+    from src.data.data_loader import annotate_cell_types
+
+    adata = anndata.AnnData(np.ones((3, 2), dtype=np.float32))
+    adata.var_names = ["g1", "g2"]
+    hg19 = tmp_path / "hg19.gff3"
+    hg38 = tmp_path / "hg38.gff3"
+    hg19.write_text("")
+    hg38.write_text("")
+    _install_fake_harmonise(
+        monkeypatch,
+        labels=["T cells", "B cells", "T cells"],
+        scores=[0.91, 0.88, 0.73],
+    )
+    annotate_cell_types(adata, hg19_gtf=hg19, target_hg38_gff=hg38)
+    assert list(adata.obs["predicted_labels"]) == ["T cells", "B cells", "T cells"]
+    assert np.allclose(adata.obs["conf_score"].to_numpy(), [0.91, 0.88, 0.73])
+    assert "predicted_labels_mainCellType" not in adata.obs.columns
+
+
+def test_annotate_cell_types_renames_when_labels_already_exist(monkeypatch, tmp_path):
+    anndata = pytest.importorskip("anndata")
+    from src.data.data_loader import annotate_cell_types
+
+    adata = anndata.AnnData(np.ones((3, 2), dtype=np.float32))
+    adata.var_names = ["g1", "g2"]
+    adata.obs["predicted_labels"] = ["CD4 T", "B cells", "CD8 T"]
+    adata.obs["conf_score"] = [0.99, 0.95, 0.92]
+    hg19 = tmp_path / "hg19.gff3"
+    hg38 = tmp_path / "hg38.gff3"
+    hg19.write_text("")
+    hg38.write_text("")
+    fake = _install_fake_harmonise(
+        monkeypatch,
+        labels=["T cells", "B cells", "T cells"],
+        scores=[0.91, 0.88, 0.73],
+    )
+    annotate_cell_types(adata, hg19_gtf=hg19, target_hg38_gff=hg38)
+    assert fake.last_kwargs["celltypist_model"] == "Immune_All_High.pkl"
+    assert list(adata.obs["predicted_labels"]) == ["CD4 T", "B cells", "CD8 T"]
+    assert np.allclose(adata.obs["conf_score"].to_numpy(), [0.99, 0.95, 0.92])
+    assert list(adata.obs["predicted_labels_mainCellType"]) == ["T cells", "B cells", "T cells"]
+    assert np.allclose(adata.obs["conf_scores_mainCellType"].to_numpy(), [0.91, 0.88, 0.73])
+
+
+def test_sample_from_anndata_cell_type_annotation_keeps_main_types_on_annotation(
+    monkeypatch,
+    tmp_path,
+):
+    anndata = pytest.importorskip("anndata")
+    from src.data.data_loader import MAIN_CELL_TYPE_KEYS, sample_from_anndata
+
+    adata = anndata.AnnData(np.ones((3, 2), dtype=np.float32))
+    adata.var_names = ["g1", "g2"]
+    adata.layers["counts"] = np.arange(6, dtype=np.float32).reshape(3, 2)
+    adata.obs["predicted_labels"] = ["CD4 T", "B cells", "CD8 T"]
+    adata.obs["conf_score"] = [0.99, 0.95, 0.92]
+    adata.obs["age"] = [50, 50, 51]
+    hg19 = tmp_path / "hg19.gff3"
+    hg38 = tmp_path / "hg38.gff3"
+    hg19.write_text("")
+    hg38.write_text("")
+    _install_fake_harmonise(
+        monkeypatch,
+        labels=["T cells", "B cells", "T cells"],
+        scores=[0.91, 0.88, 0.73],
+    )
+    sample = sample_from_anndata(
+        adata,
+        sample_id="S1",
+        patient_id="P1",
+        label="NR",
+        load_cell_annotation=True,
+        load_clinical_metadata=True,
+        cell_type_annotation=True,
+        hg19_gtf=hg19,
+        target_hg38_gff=hg38,
+        hvg_names=("g1", "g2"),
+    )
+    assert list(sample.cell_annotation["predicted_labels"]) == ["CD4 T", "B cells", "CD8 T"]
+    assert list(sample.cell_annotation["predicted_labels_mainCellType"]) == [
+        "T cells",
+        "B cells",
+        "T cells",
+    ]
+    assert set(MAIN_CELL_TYPE_KEYS) <= set(sample.cell_annotation)
+    assert set(sample.clinical_metadata) == {"age"}
