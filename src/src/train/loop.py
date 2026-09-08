@@ -27,6 +27,7 @@ from src.train.dataset import (
 )
 from src.train.metrics import classification_metrics, format_metrics
 from src.train.model import Pooling, SampleGraphClassifier
+from src.train.report import write_run_report
 
 
 @dataclass
@@ -124,6 +125,26 @@ def run_epoch(
     return metrics
 
 
+@torch.no_grad()
+def collect_predictions(
+    model: SampleGraphClassifier,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(y_true, y_prob)`` for the best-checkpoint readout."""
+    model.eval()
+    logits: list[torch.Tensor] = []
+    labels: list[torch.Tensor] = []
+    for batch in loader:
+        batch = batch.to(device)
+        logits.append(model(batch).detach().cpu())
+        labels.append(batch.y.reshape(-1).detach().cpu())
+    y_true = torch.cat(labels).numpy()
+    y_prob = torch.sigmoid(torch.cat(logits)).numpy()
+    return y_true, y_prob
+
+
 def _loader(
     items: Sequence[SampleData | SampleRecord],
     *,
@@ -180,13 +201,14 @@ def _append_history(path: Path, result: EpochResult) -> None:
     with path.open("a", newline="") as handle:
         writer = csv.writer(handle)
         if new_file:
-            writer.writerow(["epoch", "split", "acc", "auprc", "f1", "loss"])
+            writer.writerow(["epoch", "split", "acc", "auroc", "auprc", "f1", "loss"])
         for split, metrics in (("train", result.train), ("val", result.val)):
             writer.writerow(
                 [
                     result.epoch,
                     split,
                     metrics["acc"],
+                    metrics.get("auroc", float("nan")),
                     metrics["auprc"],
                     metrics["f1"],
                     metrics["loss"],
@@ -374,6 +396,25 @@ def train(
             _write_json(out / "test_metrics.json", test_metrics)
     if out is not None:
         _write_json(out / "best.json", {"epoch": best_epoch, "score": best_score})
+        predictions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for name, items in (("train", train_items), ("val", val_items), ("test", test_items)):
+            if not items:
+                continue
+            loader = _loader(
+                items,
+                sampler=sampler,
+                gene_universe=gene_universe,
+                config=config,
+                training=False,
+                hvg_names=hvg_tuple or None,
+            )
+            predictions[name] = collect_predictions(model, loader, device=device)
+        write_run_report(
+            out,
+            history=history,
+            predictions=predictions,
+            threshold=config.threshold,
+        )
     return TrainResult(
         history=history,
         model=model,

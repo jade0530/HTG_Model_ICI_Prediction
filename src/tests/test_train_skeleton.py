@@ -13,7 +13,7 @@ from src.train.dataset import (
     split_by_patient,
 )
 from src.train.loop import TrainConfig, fit
-from src.train.metrics import classification_metrics
+from src.train.metrics import classification_metrics, confusion_counts
 
 
 def _toy_sample(sample_id: str, patient_id: str, label: str, seed: int) -> AnnDataSample:
@@ -39,6 +39,9 @@ def test_classification_metrics_acc_auprc_f1():
     assert metrics["acc"] == 1.0
     assert metrics["f1"] == 1.0
     assert metrics["auprc"] == pytest.approx(1.0)
+    assert metrics["auroc"] == pytest.approx(1.0)
+    matrix = confusion_counts(y_true, y_prob)
+    assert matrix.tolist() == [[2, 0], [0, 2]]
 
 
 def test_split_by_patient_is_disjoint():
@@ -215,6 +218,12 @@ def test_train_writes_checkpoints_and_history(tmp_path):
     assert (tmp_path / "last.pt").is_file()
     assert (tmp_path / "history.csv").is_file()
     assert (tmp_path / "split.json").is_file()
+    assert (tmp_path / "results.csv").is_file()
+    assert (tmp_path / "results_relative.csv").is_file()
+    assert (tmp_path / "confusion_matrix_val.csv").is_file()
+    assert (tmp_path / "confusion_matrix_val.png").is_file()
+    assert (tmp_path / "history_curves.png").is_file()
+    assert (tmp_path / "metrics_by_split.png").is_file()
     assert result.output_dir == tmp_path
 
 
@@ -341,7 +350,7 @@ def test_fit_runs_one_epoch_and_reports_metrics():
     )
     assert len(history) == 1
     for split_metrics in (history[0].train, history[0].val):
-        assert set(split_metrics) >= {"acc", "auprc", "f1", "loss"}
+        assert set(split_metrics) >= {"acc", "auroc", "auprc", "f1", "loss"}
         assert 0.0 <= split_metrics["acc"] <= 1.0
         assert 0.0 <= split_metrics["f1"] <= 1.0
         assert split_metrics["loss"] >= 0.0
