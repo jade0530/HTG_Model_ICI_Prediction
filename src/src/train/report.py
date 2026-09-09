@@ -224,7 +224,7 @@ def write_predictions(
 ) -> None:
     """Write per-sample R/NR scores for a saved-run inference pass."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    columns = ("sample_id", "patient_key", "label", "prob_R", "pred")
+    columns = ("sample_id", "patient_key", "cell_type", "label", "prob_R", "pred")
     _write_csv(
         output_dir / "predictions.csv",
         columns,

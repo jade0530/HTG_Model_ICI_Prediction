@@ -6,7 +6,7 @@ import csv
 import json
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import numpy as np
 import torch
@@ -17,12 +17,13 @@ from src.data.data_loader import DEFAULT_N_HVG, SampleData
 from src.data.sampler import CellSampler
 from src.graph.build_local_graph import GeneStrategy, GeneUniverse
 from src.train.dataset import (
+    CellTypeLevel,
     SamplingMode,
     SampleRecord,
     SampleGraphDataset,
+    annotation_keys_for,
     build_gene_universe,
     patient_key,
-    select_train_hvgs,
     split_by_patient,
 )
 from src.train.metrics import ThresholdStrategy, classification_metrics, format_metrics, select_threshold
@@ -44,13 +45,14 @@ class TrainConfig:
     dropout: float = 0.1
     gene_strategy: GeneStrategy = "hvg"
     sampling_mode: SamplingMode = "random"
+    cell_type_level: CellTypeLevel = "fine"
+    cell_types: tuple[str, ...] = ()
     batch_size: int = 2
     epochs: int = 5
     lr: float = 1e-3
     val_fraction: float = 0.25
     test_fraction: float = 0.0
     n_hvg: int = DEFAULT_N_HVG
-    hvg_cells_per_sample: int = 256
     cache_samples: bool = True
     use_pos_weight: bool = True
     seed: int = 0
@@ -71,7 +73,7 @@ class TrainResult:
     history: list[EpochResult]
     model: SampleGraphClassifier
     gene_universe: GeneUniverse
-    hvg_names: tuple[str, ...]
+    hvg_by_sample: dict[str, tuple[str, ...]]
     best_epoch: int
     threshold: float = 0.5
     test: dict[str, float] | None = None
@@ -85,7 +87,6 @@ class SavedRun:
     model: SampleGraphClassifier
     config: TrainConfig
     gene_universe: GeneUniverse
-    hvg_names: tuple[str, ...]
     threshold: float
     epoch: int
     path: Path
@@ -167,7 +168,10 @@ def collect_predictions(
 
 def config_from_dict(payload: dict) -> TrainConfig:
     allowed = {item.name for item in dataclass_fields(TrainConfig)}
-    return TrainConfig(**{key: value for key, value in payload.items() if key in allowed})
+    values = {key: value for key, value in payload.items() if key in allowed}
+    if "cell_types" in values and values["cell_types"] is not None:
+        values["cell_types"] = tuple(values["cell_types"])
+    return TrainConfig(**values)
 
 
 def build_classifier(num_genes: int, config: TrainConfig) -> SampleGraphClassifier:
@@ -190,7 +194,6 @@ def _loader(
     gene_universe: GeneUniverse,
     config: TrainConfig,
     training: bool,
-    hvg_names: Sequence[str] | None = None,
 ) -> DataLoader:
     dataset = SampleGraphDataset(
         items,
@@ -198,9 +201,10 @@ def _loader(
         gene_universe=gene_universe,
         gene_strategy=config.gene_strategy,
         sampling_mode=config.sampling_mode,
+        annotation_keys=annotation_keys_for(config.cell_type_level),
+        cell_types=config.cell_types or None,
         training=training,
         seed=config.seed,
-        hvg_names=hvg_names,
         n_hvg=config.n_hvg,
         cache_samples=config.cache_samples,
     )
@@ -260,7 +264,6 @@ def _save_checkpoint(
     model: SampleGraphClassifier,
     config: TrainConfig,
     gene_universe: GeneUniverse,
-    hvg_names: Sequence[str],
     epoch: int,
     metrics: dict[str, float],
     threshold: float | None = None,
@@ -270,7 +273,6 @@ def _save_checkpoint(
         "model": model.state_dict(),
         "config": asdict(config),
         "gene_universe": list(gene_universe.names),
-        "hvg_names": list(hvg_names),
         "metrics": metrics,
     }
     if threshold is not None:
@@ -284,17 +286,14 @@ def train(
     *,
     config: TrainConfig | None = None,
     gene_universe: GeneUniverse | None = None,
-    hvg_names: Sequence[str] | None = None,
     output_dir: str | Path | None = None,
     log: bool = True,
 ) -> TrainResult:
     """Patient-disjoint train/val(/test), then fit the sample-graph classifier.
 
-    ``gene_universe`` defaults to the union of train+val+test gene names.
-    HVGs are estimated on the train fold only unless ``hvg_names`` is passed.
-    The R/NR cutoff is chosen on val (``threshold_strategy``) after the best
-    checkpoint; epoch logs still use ``threshold`` (default 0.5). AUROC/AUPRC
-    ignore the cutoff.
+    Each sample keeps its own HVG list (scanpy on that sample, then cached).
+    The gene universe is only a shared ID table. The R/NR cutoff is chosen on
+    val after the best checkpoint; epoch logs still use ``threshold``.
     """
     config = config or TrainConfig()
     seed_everything(config.seed)
@@ -314,14 +313,6 @@ def train(
 
     if gene_universe is None:
         gene_universe = build_gene_universe(list(train_items) + list(val_items) + list(test_items))
-    if hvg_names is None and config.gene_strategy == "hvg":
-        hvg_names = select_train_hvgs(
-            train_items,
-            n_hvg=config.n_hvg,
-            cells_per_sample=config.hvg_cells_per_sample,
-            seed=config.seed,
-        )
-    hvg_tuple = tuple(hvg_names) if hvg_names is not None else ()
 
     out: Path | None = None
     if output_dir is not None:
@@ -337,25 +328,13 @@ def train(
             },
         )
         (out / "gene_universe.txt").write_text("\n".join(gene_universe.names) + "\n")
-        if hvg_tuple:
-            (out / "hvg_names.txt").write_text("\n".join(hvg_tuple) + "\n")
 
     sampler = CellSampler(num_cells=config.num_cells, seed=config.seed)
     train_loader = _loader(
-        train_items,
-        sampler=sampler,
-        gene_universe=gene_universe,
-        config=config,
-        training=True,
-        hvg_names=hvg_tuple or None,
+        train_items, sampler=sampler, gene_universe=gene_universe, config=config, training=True
     )
     val_loader = _loader(
-        val_items,
-        sampler=sampler,
-        gene_universe=gene_universe,
-        config=config,
-        training=False,
-        hvg_names=hvg_tuple or None,
+        val_items, sampler=sampler, gene_universe=gene_universe, config=config, training=False
     )
     model = build_classifier(len(gene_universe), config).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
@@ -364,6 +343,7 @@ def train(
     best_epoch = 0
     best_score = float("-inf")
     best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+    best_val_metrics: dict[str, float] = {}
 
     for epoch in range(config.epochs):
         train_metrics = run_epoch(
@@ -393,7 +373,6 @@ def train(
                 model=model,
                 config=config,
                 gene_universe=gene_universe,
-                hvg_names=hvg_tuple,
                 epoch=epoch,
                 metrics=val_metrics,
             )
@@ -401,90 +380,55 @@ def train(
         if score > best_score:
             best_score = score
             best_epoch = epoch
+            best_val_metrics = val_metrics
             best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
-            if out is not None:
-                _save_checkpoint(
-                    out / "best.pt",
-                    model=model,
-                    config=config,
-                    gene_universe=gene_universe,
-                    hvg_names=hvg_tuple,
-                    epoch=epoch,
-                    metrics=val_metrics,
-                )
 
     model.load_state_dict(best_state)
+    hvg_by_sample = _collect_hvgs(train_loader, val_loader)
 
-    def _split_predictions(split_items: Sequence[SampleData | SampleRecord]) -> tuple[np.ndarray, np.ndarray]:
+    def _split_predictions(split_items: Sequence[SampleData | SampleRecord]):
+        if not split_items:
+            return None
         loader = _loader(
-            split_items,
-            sampler=sampler,
-            gene_universe=gene_universe,
-            config=config,
-            training=False,
-            hvg_names=hvg_tuple or None,
+            split_items, sampler=sampler, gene_universe=gene_universe, config=config, training=False
         )
+        hvg_by_sample.update(loader.dataset.frozen_hvgs())
         return collect_predictions(model, loader, device=device)
 
-    if val_items:
-        val_true, val_prob = _split_predictions(val_items)
+    val_pred = _split_predictions(val_items)
+    if val_pred is not None:
         chosen_threshold = select_threshold(
-            val_true,
-            val_prob,
-            strategy=config.threshold_strategy,
-            fixed=config.threshold,
+            val_pred[0], val_pred[1], strategy=config.threshold_strategy, fixed=config.threshold
         )
     else:
-        val_true = val_prob = None
         chosen_threshold = float(config.threshold)
     if log:
         print(f"threshold={chosen_threshold:.4f} strategy={config.threshold_strategy}")
 
+    test_pred = _split_predictions(test_items)
     test_metrics = None
-    if test_items:
-        test_loader = _loader(
-            test_items,
-            sampler=sampler,
-            gene_universe=gene_universe,
-            config=config,
-            training=False,
-            hvg_names=hvg_tuple or None,
-        )
-        test_metrics = run_epoch(
-            model,
-            test_loader,
-            device=device,
-            optimizer=None,
-            threshold=chosen_threshold,
-        )
+    if test_pred is not None:
+        test_metrics = classification_metrics(test_pred[0], test_pred[1], threshold=chosen_threshold)
         if log:
             print(format_metrics("test", test_metrics))
-        if out is not None:
-            _write_json(out / "test_metrics.json", test_metrics)
+
     if out is not None:
         predictions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        if val_true is not None:
-            predictions["val"] = (val_true, val_prob)
-        for name, split_items in (("train", train_items), ("test", test_items)):
-            if split_items:
-                predictions[name] = _split_predictions(split_items)
-        _write_json(
-            out / "best.json",
-            {
-                "epoch": best_epoch,
-                "score": best_score,
-                "threshold": chosen_threshold,
-                "threshold_strategy": config.threshold_strategy,
-            },
-        )
+        if val_pred is not None:
+            predictions["val"] = val_pred
+        train_pred = _split_predictions(train_items)
+        if train_pred is not None:
+            predictions["train"] = train_pred
+        if test_pred is not None:
+            predictions["test"] = test_pred
+        _write_json(out / "hvgs.json", {key: list(names) for key, names in sorted(hvg_by_sample.items())})
         _save_checkpoint(
             out / "best.pt",
             model=model,
             config=config,
             gene_universe=gene_universe,
-            hvg_names=hvg_tuple,
             epoch=best_epoch,
-            metrics=history[best_epoch].val if history else {},
+            metrics=best_val_metrics,
             threshold=chosen_threshold,
         )
         write_run_report(
@@ -498,12 +442,19 @@ def train(
         history=history,
         model=model,
         gene_universe=gene_universe,
-        hvg_names=hvg_tuple,
+        hvg_by_sample=hvg_by_sample,
         best_epoch=best_epoch,
         threshold=chosen_threshold,
         test=test_metrics,
         output_dir=out,
     )
+
+
+def _collect_hvgs(*loaders: DataLoader) -> dict[str, tuple[str, ...]]:
+    mapping: dict[str, tuple[str, ...]] = {}
+    for loader in loaders:
+        mapping.update(loader.dataset.frozen_hvgs())
+    return mapping
 
 
 def fit(
@@ -515,33 +466,6 @@ def fit(
 ) -> list[EpochResult]:
     """In-memory training used by tests. Writes no files."""
     return train(samples, config=config, gene_universe=gene_universe, log=log).history
-
-
-def evaluate(
-    model: SampleGraphClassifier,
-    samples: Iterable[SampleData],
-    gene_universe: GeneUniverse,
-    *,
-    config: TrainConfig | None = None,
-    hvg_names: Sequence[str] | None = None,
-) -> dict[str, float]:
-    config = config or TrainConfig()
-    sampler = CellSampler(num_cells=config.num_cells, seed=config.seed)
-    loader = _loader(
-        list(samples),
-        sampler=sampler,
-        gene_universe=gene_universe,
-        config=config,
-        training=False,
-        hvg_names=hvg_names,
-    )
-    return run_epoch(
-        model,
-        loader,
-        device=resolve_device(config.device),
-        optimizer=None,
-        threshold=config.threshold,
-    )
 
 
 def _resolve_checkpoint_path(path: str | Path) -> Path:
@@ -563,30 +487,13 @@ def _load_payload(path: Path) -> dict:
     return payload
 
 
-def _sidecar_threshold(ckpt_path: Path) -> float | None:
-    for name in ("threshold.json", "best.json"):
-        side = ckpt_path.parent / name
-        if not side.is_file():
-            continue
-        data = json.loads(side.read_text())
-        if "threshold" in data:
-            return float(data["threshold"])
-    return None
-
-
 def load_checkpoint(path: str | Path, *, device: str | None = None) -> SavedRun:
-    """Rebuild the classifier, gene universe, HVGs, and R/NR cutoff from a run."""
+    """Rebuild the classifier, gene universe, and R/NR cutoff from a run."""
     ckpt_path = _resolve_checkpoint_path(path)
     payload = _load_payload(ckpt_path)
     config = config_from_dict(payload.get("config") or {})
     gene_universe = GeneUniverse(payload["gene_universe"])
-    hvg_names = tuple(str(name) for name in payload.get("hvg_names") or ())
-    if "threshold" in payload:
-        threshold = float(payload["threshold"])
-    else:
-        threshold = _sidecar_threshold(ckpt_path)
-        if threshold is None:
-            threshold = float(config.threshold)
+    threshold = float(payload["threshold"]) if "threshold" in payload else float(config.threshold)
     config.threshold = threshold
     resolved = resolve_device(device or config.device)
     model = build_classifier(len(gene_universe), config)
@@ -597,7 +504,6 @@ def load_checkpoint(path: str | Path, *, device: str | None = None) -> SavedRun:
         model=model,
         config=config,
         gene_universe=gene_universe,
-        hvg_names=hvg_names,
         threshold=threshold,
         epoch=int(payload.get("epoch", 0)),
         path=ckpt_path,
@@ -614,8 +520,8 @@ def predict(
 ) -> dict[str, object]:
     """Score new samples with a saved run. Graphs are rebuilt, weights are not.
 
-    Each sample is mapped onto the frozen training gene universe and HVG list,
-    then encoded with the saved GNN. The val-tuned cutoff decides R vs NR.
+    Each sample uses its own HVGs, mapped onto the frozen training gene universe.
+    The val-tuned cutoff decides R vs NR.
     """
     saved = run if isinstance(run, SavedRun) else load_checkpoint(run, device=device)
     items = list(items)
@@ -630,19 +536,21 @@ def predict(
         gene_universe=saved.gene_universe,
         config=config,
         training=False,
-        hvg_names=saved.hvg_names or None,
     )
     y_true, y_prob = collect_predictions(saved.model, loader, device=resolved)
     y_pred = (y_prob >= saved.threshold).astype(np.int64)
+    dataset = loader.dataset
     rows = []
     labelled_true: list[float] = []
     labelled_prob: list[float] = []
-    for item, truth, prob, pred in zip(items, y_true, y_prob, y_pred, strict=True):
+    for view, truth, prob, pred in zip(dataset.views, y_true, y_prob, y_pred, strict=True):
+        item = dataset.items[view.item_index]
         label = _item_label(item)
         rows.append(
             {
                 "sample_id": str(item.sample_id),
                 "patient_key": patient_key(item),
+                "cell_type": view.cell_type or "",
                 "label": label,
                 "prob_R": float(prob),
                 "pred": "R" if int(pred) == 1 else "NR",
@@ -652,7 +560,7 @@ def predict(
             labelled_true.append(float(truth))
             labelled_prob.append(float(prob))
     metrics = None
-    if labelled_true and len(set(labelled_true)) >= 1:
+    if labelled_true:
         metrics = classification_metrics(
             np.asarray(labelled_true),
             np.asarray(labelled_prob),
@@ -670,10 +578,7 @@ def predict(
             metrics=metrics,
         )
     if log:
-        print(
-            f"samples={len(rows)} threshold={saved.threshold:.4f} "
-            f"checkpoint={saved.path}"
-        )
+        print(f"samples={len(rows)} threshold={saved.threshold:.4f} checkpoint={saved.path}")
         if metrics is not None:
             print(format_metrics("predict", metrics))
     return {

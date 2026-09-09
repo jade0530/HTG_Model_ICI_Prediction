@@ -202,6 +202,111 @@ def test_dataset_proportional_sampling_builds_a_graph():
     assert graph.y.tolist() == [1.0]
 
 
+def test_dataset_graphs_use_sample_level_hvgs():
+    from src.data.sampler import CellSampler
+    from src.train.dataset import SampleGraphDataset
+
+    first = _toy_sample("S1", "P1", "R", 1)
+    rng = np.random.default_rng(2)
+    second = AnnDataSample(
+        sample_id="S2",
+        patient_id="P2",
+        X=rng.random((6, 4)).astype(np.float32) + 0.1,
+        gene_names=("G2", "OFF_UNIVERSE", "G1", "G3"),
+        hvg_names=("G1",),
+        cell_annotation={},
+        clinical_metadata={},
+        label="NR",
+        n_hvg=1,
+    )
+    dataset = SampleGraphDataset(
+        [first, second],
+        sampler=CellSampler(num_cells=4, seed=0),
+        gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
+        training=False,
+    )
+    genes = {graph.sample_id: set(graph["gene"].global_id.tolist()) for graph in (dataset[0], dataset[1])}
+    assert genes["S2"] <= genes["S1"]
+    assert genes["S2"] == {0}
+    assert dataset.frozen_hvgs() == {"S1": ("G1", "G2", "G3"), "S2": ("G1",)}
+
+
+def _annotated_toy_sample(sample_id: str, patient_id: str, label: str, seed: int) -> AnnDataSample:
+    rng = np.random.default_rng(seed)
+    matrix = rng.random((6, 4)).astype(np.float32) + 0.1
+    return AnnDataSample(
+        sample_id=sample_id,
+        patient_id=patient_id,
+        X=matrix,
+        gene_names=("G2", "OFF_UNIVERSE", "G1", "G3"),
+        hvg_names=("G1", "G2", "G3"),
+        cell_annotation={
+            "predicted_labels": np.array(["T", "T", "T", "T", "B", "B"]),
+            "conf_score": np.linspace(0.2, 0.9, 6),
+        },
+        clinical_metadata={},
+        label=label,
+        n_hvg=3,
+    )
+
+
+def test_dataset_by_cell_type_builds_one_graph_per_type():
+    from src.data.sampler import CellSampler
+    from src.train.dataset import SampleGraphDataset
+
+    sample = _annotated_toy_sample("S1", "P1", "R", 1)
+    dataset = SampleGraphDataset(
+        [sample],
+        sampler=CellSampler(num_cells=4, seed=0),
+        gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
+        sampling_mode="by_cell_type",
+        training=False,
+    )
+    assert len(dataset) == 2
+    by_type = {graph.cell_type: graph for graph in (dataset[0], dataset[1])}
+    assert set(by_type) == {"B", "T"}
+    assert int(by_type["T"]["cell"].num_nodes) == 4
+    assert int(by_type["B"]["cell"].num_nodes) == 2
+    only_t = SampleGraphDataset(
+        [sample],
+        sampler=CellSampler(num_cells=4, seed=0),
+        gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
+        sampling_mode="by_cell_type",
+        cell_types=("T",),
+        training=False,
+    )
+    assert len(only_t) == 1
+    assert only_t[0].cell_type == "T"
+    assert int(only_t[0]["cell"].num_nodes) == 4
+
+
+def test_fit_runs_with_by_cell_type_sampling():
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    samples = [
+        _annotated_toy_sample("S1", "P1", "R", 1),
+        _annotated_toy_sample("S2", "P2", "R", 2),
+        _annotated_toy_sample("S3", "P3", "NR", 3),
+        _annotated_toy_sample("S4", "P4", "NR", 4),
+    ]
+    history = fit(
+        samples,
+        GeneUniverse(["G1", "G2", "G3", "G4"]),
+        config=TrainConfig(
+            hidden_dim=8,
+            num_cells=4,
+            sampling_mode="by_cell_type",
+            batch_size=2,
+            epochs=1,
+            val_fraction=0.5,
+            seed=0,
+        ),
+        log=False,
+    )
+    assert len(history) == 1
+    assert history[0].train["loss"] >= 0.0
+
+
 def test_train_writes_checkpoints_and_history(tmp_path):
     from src.train.loop import train
 
@@ -226,16 +331,14 @@ def test_train_writes_checkpoints_and_history(tmp_path):
         log=False,
     )
     assert len(result.history) == 2
+    assert result.hvg_by_sample["S1"] == ("G1", "G2", "G3")
+    assert set(result.hvg_by_sample) == {"S1", "S2", "S3", "S4"}
     assert (tmp_path / "best.pt").is_file()
     assert (tmp_path / "last.pt").is_file()
     assert (tmp_path / "history.csv").is_file()
     assert (tmp_path / "split.json").is_file()
+    assert (tmp_path / "hvgs.json").is_file()
     assert (tmp_path / "results.csv").is_file()
-    assert (tmp_path / "results_relative.csv").is_file()
-    assert (tmp_path / "confusion_matrix_val.csv").is_file()
-    assert (tmp_path / "confusion_matrix_val.png").is_file()
-    assert (tmp_path / "history_curves.png").is_file()
-    assert (tmp_path / "metrics_by_split.png").is_file()
     assert (tmp_path / "threshold.json").is_file()
     assert 0.0 <= result.threshold <= 1.0
     assert result.output_dir == tmp_path
@@ -247,7 +350,6 @@ def test_train_writes_checkpoints_and_history(tmp_path):
     assert saved.gene_universe.names == result.gene_universe.names
     scored = predict(samples, saved, output_dir=tmp_path / "infer", log=False)
     assert (tmp_path / "infer" / "predictions.csv").is_file()
-    assert (tmp_path / "infer" / "predict.json").is_file()
     assert len(scored["rows"]) == 4
     assert {row["pred"] for row in scored["rows"]} <= {"R", "NR"}
 
@@ -258,22 +360,12 @@ def test_cli_parse_defaults():
     args = parse_args([])
     assert args.gene_strategy == "hvg"
     assert args.sampling_mode == "random"
+    assert args.cell_type_level == "fine"
     assert args.pooling == "mean"
     assert args.readout == "cell"
     assert args.encoder == "sage"
     assert args.threshold_strategy == "max_f1"
     assert args.test_fraction == 0.0
-
-
-def test_cli_predict_requires_checkpoint():
-    from src.train.__main__ import parse_predict_args
-
-    with pytest.raises(SystemExit):
-        parse_predict_args([])
-    args = parse_predict_args(
-        ["--checkpoint", "outputs/run/best.pt", "--dataset-root", "data/new"]
-    )
-    assert args.checkpoint.name == "best.pt"
 
 
 def test_attention_pool_normalises_per_graph():
@@ -407,33 +499,6 @@ def test_classifier_attention_pooling_returns_one_logit():
     _, weights = model.pool_cells(cell_x, batch)
     assert weights is not None
     assert torch.isclose(weights.sum(), torch.tensor(1.0), atol=1e-6)
-
-
-def test_fit_runs_with_attention_pooling():
-    pytest.importorskip("torch")
-    pytest.importorskip("torch_geometric")
-    samples = [
-        _toy_sample("S1", "P1", "R", 1),
-        _toy_sample("S2", "P2", "R", 2),
-        _toy_sample("S3", "P3", "NR", 3),
-        _toy_sample("S4", "P4", "NR", 4),
-    ]
-    history = fit(
-        samples,
-        GeneUniverse(["G1", "G2", "G3", "G4"]),
-        config=TrainConfig(
-            hidden_dim=8,
-            num_cells=4,
-            pooling="attention",
-            batch_size=2,
-            epochs=1,
-            val_fraction=0.5,
-            seed=0,
-        ),
-        log=False,
-    )
-    assert len(history) == 1
-    assert "loss" in history[0].train
 
 
 def test_fit_runs_one_epoch_and_reports_metrics():

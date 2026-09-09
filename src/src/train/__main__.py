@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from src.train.dataset import DEFAULT_MANIFEST, REPO_ROOT, collect_records
-from src.train.loop import TrainConfig, load_checkpoint, predict, train
+from src.train.loop import TrainConfig, predict, train
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -36,14 +36,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gat-heads", type=int, default=4)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--gene-strategy", choices=("hvg", "expressed"), default="hvg")
-    parser.add_argument("--sampling-mode", choices=("random", "proportional"), default="random")
+    parser.add_argument(
+        "--sampling-mode",
+        choices=("random", "proportional", "by_cell_type"),
+        default="random",
+        help="random cells, type-proportional mix, or one graph per cell type",
+    )
+    parser.add_argument(
+        "--cell-type-level",
+        choices=("fine", "main"),
+        default="fine",
+        help="predicted_labels (fine) or predicted_labels_mainCellType (main)",
+    )
+    parser.add_argument(
+        "--cell-type",
+        action="append",
+        default=None,
+        help="Keep only this cell type for by_cell_type. Repeat to pass several types",
+    )
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--val-fraction", type=float, default=0.25)
     parser.add_argument("--test-fraction", type=float, default=0.0)
     parser.add_argument("--n-hvg", type=int, default=500)
-    parser.add_argument("--hvg-cells-per-sample", type=int, default=256)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="auto")
     parser.add_argument(
@@ -102,13 +118,14 @@ def main_train(argv: list[str] | None = None) -> None:
             dropout=args.dropout,
             gene_strategy=args.gene_strategy,
             sampling_mode=args.sampling_mode,
+            cell_type_level=args.cell_type_level,
+            cell_types=tuple(args.cell_type or ()),
             batch_size=args.batch_size,
             epochs=args.epochs,
             lr=args.lr,
             val_fraction=args.val_fraction,
             test_fraction=args.test_fraction,
             n_hvg=args.n_hvg,
-            hvg_cells_per_sample=args.hvg_cells_per_sample,
             cache_samples=not args.no_cache_samples,
             use_pos_weight=not args.no_pos_weight,
             seed=args.seed,

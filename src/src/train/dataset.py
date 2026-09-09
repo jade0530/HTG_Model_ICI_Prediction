@@ -16,15 +16,16 @@ from torch_geometric.data import HeteroData
 from src.data.data_loader import (
     CELL_ANNOTATION_KEYS,
     DEFAULT_N_HVG,
+    MAIN_CELL_TYPE_KEYS,
     AnnDataSample,
     SampleData,
     sample_from_anndata,
-    select_sample_hvgs,
 )
 from src.data.sampler import CellSampler
 from src.graph.build_local_graph import GeneStrategy, GeneUniverse, build_local_graph
 
-SamplingMode = Literal["random", "proportional"]
+SamplingMode = Literal["random", "proportional", "by_cell_type"]
+CellTypeLevel = Literal["fine", "main"]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST = REPO_ROOT / "data" / "sample_manifest.csv"
@@ -56,6 +57,15 @@ class SampleRecord:
     def patient_key(self) -> str:
         """Stable patient identity across a patient's multiple samples."""
         return f"{self.dataset_id}::{self.patient_id}"
+
+
+def annotation_keys_for(level: CellTypeLevel = "fine") -> tuple[str, str]:
+    """Fine CellTypist labels, or Immune_All_High main types."""
+    if level == "main":
+        return MAIN_CELL_TYPE_KEYS
+    if level != "fine":
+        raise ValueError("cell_type_level must be 'fine' or 'main'")
+    return CELL_ANNOTATION_KEYS
 
 
 def patient_key(item: object) -> str:
@@ -268,34 +278,6 @@ def build_gene_universe(items: Sequence[SampleData | SampleRecord]) -> GeneUnive
     return GeneUniverse(tuple(seen))
 
 
-def select_train_hvgs(
-    train_items: Sequence[SampleData | SampleRecord],
-    *,
-    n_hvg: int = DEFAULT_N_HVG,
-    cells_per_sample: int = 256,
-    seed: int = 0,
-) -> tuple[str, ...]:
-    """Train-only HVGs. Disk samples are subsampled, concatenated, then ranked by scanpy."""
-    if not train_items:
-        raise ValueError("select_train_hvgs requires train samples")
-    if not isinstance(train_items[0], SampleRecord):
-        names = tuple(str(name) for name in train_items[0].hvg_names)
-        return names[:n_hvg]
-    import anndata as ad
-
-    rng = np.random.default_rng(seed)
-    pieces = []
-    for item in train_items:
-        adata = ad.read_h5ad(item.h5ad_path)
-        n_cells = int(adata.n_obs)
-        if n_cells > cells_per_sample:
-            idx = np.sort(rng.choice(n_cells, size=cells_per_sample, replace=False))
-            adata = adata[idx].copy()
-        pieces.append(adata)
-    combined = ad.concat(pieces, join="inner", index_unique="-")
-    return select_sample_hvgs(combined, n_hvg=n_hvg)
-
-
 def load_record(
     record: SampleRecord,
     *,
@@ -309,7 +291,9 @@ def load_record(
     import anndata as ad
 
     adata = ad.read_h5ad(record.h5ad_path)
-    has_annotation = all(key in adata.obs.columns for key in CELL_ANNOTATION_KEYS)
+    has_annotation = all(key in adata.obs.columns for key in CELL_ANNOTATION_KEYS) or all(
+        key in adata.obs.columns for key in MAIN_CELL_TYPE_KEYS
+    )
     return sample_from_anndata(
         adata,
         sample_id=record.sample_id,
@@ -323,15 +307,60 @@ def load_record(
     )
 
 
+@dataclass(frozen=True)
+class GraphView:
+    """One local graph: a sample, optionally restricted to one cell type."""
+
+    item_index: int
+    cell_type: str | None = None
+
+
+def _unique_labels(values: Sequence[object]) -> tuple[str, ...]:
+    names = []
+    seen: set[str] = set()
+    for value in values:
+        name = str(value)
+        if name in {"", "nan", "None", "NaN"} or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
+
+
+def item_cell_types(
+    item: SampleData | SampleRecord,
+    annotation_keys: tuple[str, str] = CELL_ANNOTATION_KEYS,
+) -> tuple[str, ...]:
+    """Unique cell-type labels for a loaded sample or an on-disk record."""
+    label_key = annotation_keys[0]
+    if not isinstance(item, SampleRecord):
+        if label_key not in item.cell_annotation:
+            raise ValueError(f"by_cell_type requires {label_key!r} on the sample")
+        return _unique_labels(item.cell_annotation[label_key])
+    import anndata as ad
+
+    adata = ad.read_h5ad(item.h5ad_path, backed="r")
+    try:
+        if label_key not in adata.obs.columns:
+            raise ValueError(f"by_cell_type requires {label_key!r} in {item.h5ad_path}")
+        return _unique_labels(adata.obs[label_key].astype(str).tolist())
+    finally:
+        if adata.isbacked:
+            adata.file.close()
+
+
 class SampleGraphDataset(Dataset):
     """Each access resamples cells and builds one sample-level graph.
 
     Items may be already-loaded ``SampleData`` objects or ``SampleRecord`` rows
     from the manifest. Records are read from disk on demand.
 
-    ``sampling_mode='random'`` uses ``CellSampler.sample``. ``proportional``
-    uses ``cell_type_proportional_sample`` (needs cell annotation). Training
-    draws a new subset every time; validation uses a fixed ``view_index``.
+    ``random`` uses ``CellSampler.sample``. ``proportional`` uses
+    ``cell_type_proportional_sample``. ``by_cell_type`` expands each sample into
+    one graph per cell type via ``sample_by_cell_type`` (every cell of that
+    type; ``num_cells`` is not applied). HVGs are per sample and cached with
+    the loaded matrix. Training redraws random/proportional cell subsets;
+    validation uses a fixed ``view_index``.
     """
 
     def __init__(
@@ -343,33 +372,56 @@ class SampleGraphDataset(Dataset):
         gene_strategy: GeneStrategy = "hvg",
         sampling_mode: SamplingMode = "random",
         annotation_keys: tuple[str, str] = CELL_ANNOTATION_KEYS,
+        cell_types: Sequence[str] | None = None,
         training: bool = True,
         view_index: int = 0,
         seed: int = 0,
-        hvg_names: Sequence[str] | None = None,
         n_hvg: int = DEFAULT_N_HVG,
         cache_samples: bool = False,
     ) -> None:
         if not items:
             raise ValueError("SampleGraphDataset requires at least one sample")
-        if sampling_mode not in ("random", "proportional"):
-            raise ValueError("sampling_mode must be 'random' or 'proportional'")
+        if sampling_mode not in ("random", "proportional", "by_cell_type"):
+            raise ValueError("sampling_mode must be 'random', 'proportional', or 'by_cell_type'")
         self.items = list(items)
         self.sampler = sampler
         self.gene_universe = gene_universe
         self.gene_strategy = gene_strategy
         self.sampling_mode = sampling_mode
         self.annotation_keys = annotation_keys
+        self.cell_types = None if not cell_types else tuple(str(name) for name in cell_types)
         self.training = training
         self.view_index = int(view_index)
-        self.hvg_names = None if hvg_names is None else tuple(hvg_names)
         self.n_hvg = int(n_hvg)
         self.cache_samples = cache_samples
         self._rng = np.random.default_rng(seed)
         self._cache: dict[int, SampleData] = {}
+        self.views = self._build_views()
+
+    def _build_views(self) -> list[GraphView]:
+        if self.sampling_mode != "by_cell_type":
+            return [GraphView(index) for index in range(len(self.items))]
+        allowed = None if self.cell_types is None else set(self.cell_types)
+        views: list[GraphView] = []
+        for index, item in enumerate(self.items):
+            types = item_cell_types(item, self.annotation_keys)
+            if allowed is not None:
+                types = tuple(name for name in types if name in allowed)
+            views.extend(GraphView(index, name) for name in types)
+        if not views:
+            raise ValueError("by_cell_type produced no cell-type graphs")
+        return views
 
     def __len__(self) -> int:
-        return len(self.items)
+        return len(self.views)
+
+    def frozen_hvgs(self) -> dict[str, tuple[str, ...]]:
+        """Sample-id to that sample's frozen HVG names."""
+        mapping: dict[str, tuple[str, ...]] = {}
+        for index in range(len(self.items)):
+            sample = self._sample(index)
+            mapping[str(sample.sample_id)] = tuple(str(name) for name in sample.hvg_names)
+        return mapping
 
     def _sample(self, index: int) -> SampleData:
         item = self.items[index]
@@ -377,12 +429,13 @@ class SampleGraphDataset(Dataset):
             return item
         if self.cache_samples and index in self._cache:
             return self._cache[index]
-        sample = load_record(item, hvg_names=self.hvg_names, n_hvg=self.n_hvg)
+        hvg_names = None if self.gene_strategy == "hvg" else ()
+        sample = load_record(item, hvg_names=hvg_names, n_hvg=self.n_hvg)
         if self.cache_samples:
             self._cache[index] = sample
         return sample
 
-    def _cell_indices(self, sample: SampleData) -> np.ndarray:
+    def _cell_indices(self, sample: SampleData, cell_type: str | None) -> np.ndarray:
         kwargs = {
             "training": self.training,
             "view_index": self.view_index,
@@ -390,16 +443,27 @@ class SampleGraphDataset(Dataset):
         }
         if self.sampling_mode == "random":
             return self.sampler.sample(sample.num_cells, **kwargs)
-        return self.sampler.cell_type_proportional_sample(
+        if self.sampling_mode == "proportional":
+            return self.sampler.cell_type_proportional_sample(
+                sample.num_cells,
+                cell_annotation=sample.cell_annotation,
+                annotation_keys=self.annotation_keys,
+                **kwargs,
+            )
+        if cell_type is None:
+            raise ValueError("by_cell_type requires a cell_type on the graph view")
+        return self.sampler.sample_by_cell_type(
             sample.num_cells,
+            cell_type=cell_type,
             cell_annotation=sample.cell_annotation,
             annotation_keys=self.annotation_keys,
             **kwargs,
         )
 
     def __getitem__(self, index: int) -> HeteroData:
-        sample = self._sample(index)
-        cells = self._cell_indices(sample)
+        view = self.views[index]
+        sample = self._sample(view.item_index)
+        cells = self._cell_indices(sample, view.cell_type)
         graph = build_local_graph(
             sample,
             cells,
@@ -407,6 +471,7 @@ class SampleGraphDataset(Dataset):
             gene_strategy=self.gene_strategy,
         )
         graph["cell"].x = torch.ones((int(graph["cell"].num_nodes), 1), dtype=torch.float32)
+        graph.cell_type = view.cell_type or ""
         return graph
 
 

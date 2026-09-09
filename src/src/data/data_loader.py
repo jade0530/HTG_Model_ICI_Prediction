@@ -173,10 +173,10 @@ def _hvgs_from_var(adata: object, n_hvg: int) -> tuple[str, ...]:
 
 
 def select_sample_hvgs(adata: object, *, n_hvg: int = DEFAULT_N_HVG) -> tuple[str, ...]:
-    """Select HVGs with scanpy on log-normalised ``adata.X``.
+    """Select HVGs with scanpy Seurat flavour on this matrix.
 
-    Run on the integrated AnnData before splitting so every sample shares the
-    same gene set via ``adata.var['highly_variable']``.
+    Call on one sample to freeze that sample's gene list. If ``highly_variable``
+    is already on ``adata.var``, ``_resolve_hvg_names`` reuses it.
     """
     import scanpy as sc
 
