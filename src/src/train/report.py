@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -88,7 +89,7 @@ def write_confusion_matrix(
     ax.set_yticks([0, 1], LABELS)
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")
-    ax.set_title(f"Confusion matrix ({split})")
+    ax.set_title(f"Confusion matrix ({split}, t={threshold:.3f})")
     vmax = max(int(matrix.max()), 1)
     for row in range(2):
         for col in range(2):
@@ -142,6 +143,8 @@ def plot_roc_pr(
     split: str,
     y_true: np.ndarray,
     y_prob: np.ndarray,
+    *,
+    threshold: float | None = None,
 ) -> None:
     y_int = np.asarray(y_true).reshape(-1).astype(np.int64)
     if len(np.unique(y_int)) < 2:
@@ -162,6 +165,15 @@ def plot_roc_pr(
     axes[1].set_title(f"PR ({split})")
     axes[1].set_xlabel("Recall")
     axes[1].set_ylabel("Precision")
+    if threshold is not None:
+        matrix = confusion_counts(y_int, y_prob, threshold=threshold)
+        tn, fp, fn, tp = (int(matrix[0, 0]), int(matrix[0, 1]), int(matrix[1, 0]), int(matrix[1, 1]))
+        op_fpr = fp / max(fp + tn, 1)
+        op_tpr = tp / max(tp + fn, 1)
+        op_prec = tp / max(tp + fp, 1)
+        op_rec = tp / max(tp + fn, 1)
+        axes[0].scatter([op_fpr], [op_tpr], zorder=3)
+        axes[1].scatter([op_rec], [op_prec], zorder=3)
     fig.tight_layout()
     fig.savefig(output_dir / f"roc_pr_{split}.png", dpi=150)
     plt.close(fig)
@@ -173,6 +185,7 @@ def write_run_report(
     history: Sequence[object],
     predictions: Mapping[str, tuple[np.ndarray, np.ndarray]],
     threshold: float = 0.5,
+    threshold_strategy: str = "max_f1",
 ) -> dict[str, dict[str, float]]:
     """Write results tables, confusion matrices, and summary figures."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -180,10 +193,52 @@ def write_run_report(
         split: classification_metrics(y_true, y_prob, threshold=threshold)
         for split, (y_true, y_prob) in predictions.items()
     }
+    (output_dir / "threshold.json").write_text(
+        json.dumps(
+            {
+                "strategy": threshold_strategy,
+                "threshold": threshold,
+                "tuned_on": "val" if "val" in predictions else None,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     write_results_tables(output_dir, split_metrics)
     plot_history(history, output_dir)
     plot_metrics_by_split(split_metrics, output_dir)
     for split, (y_true, y_prob) in predictions.items():
         write_confusion_matrix(output_dir, split, y_true, y_prob, threshold=threshold)
-        plot_roc_pr(output_dir, split, y_true, y_prob)
+        plot_roc_pr(output_dir, split, y_true, y_prob, threshold=threshold)
     return split_metrics
+
+
+def write_predictions(
+    output_dir: Path,
+    *,
+    rows: Sequence[Mapping[str, object]],
+    threshold: float,
+    threshold_strategy: str,
+    checkpoint: str,
+    metrics: Mapping[str, float] | None = None,
+) -> None:
+    """Write per-sample R/NR scores for a saved-run inference pass."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    columns = ("sample_id", "patient_key", "label", "prob_R", "pred")
+    _write_csv(
+        output_dir / "predictions.csv",
+        columns,
+        [[row.get(column, "") for column in columns] for row in rows],
+    )
+    payload: dict[str, object] = {
+        "checkpoint": checkpoint,
+        "threshold": threshold,
+        "threshold_strategy": threshold_strategy,
+        "n_samples": len(rows),
+    }
+    if metrics is not None:
+        payload["metrics"] = {
+            key: (None if isinstance(value, float) and value != value else value)
+            for key, value in metrics.items()
+        }
+    (output_dir / "predict.json").write_text(json.dumps(payload, indent=2) + "\n")

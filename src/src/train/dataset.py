@@ -94,6 +94,7 @@ def load_sample_manifest(
     tissue: str | None = "Tumor",
     ici_phase: str | None = "pre",
     skip_missing: bool = True,
+    require_label: bool = True,
 ) -> list[SampleRecord]:
     """Read ``sample_manifest.csv`` and keep rows that exist under ``dataset_root``.
 
@@ -117,7 +118,9 @@ def load_sample_manifest(
         for row in csv.DictReader(handle):
             label = _canonical_label(row.get("Response", ""))
             if label is None:
-                continue
+                if require_label:
+                    continue
+                label = "UNKNOWN"
             if tissue_key is not None and _normalise(row.get("Tissue", "")) != tissue_key:
                 continue
             if phase_key is not None and _normalise(row.get("ICI_phase", "")) != phase_key:
@@ -148,7 +151,11 @@ def load_sample_manifest(
     return records
 
 
-def records_from_h5ad_dir(dataset_root: str | Path) -> list[SampleRecord]:
+def records_from_h5ad_dir(
+    dataset_root: str | Path,
+    *,
+    require_label: bool = True,
+) -> list[SampleRecord]:
     """Build records from ``*.h5ad`` files and sibling ``*.metadata.csv`` rows."""
     root = Path(dataset_root)
     records: list[SampleRecord] = []
@@ -161,7 +168,9 @@ def records_from_h5ad_dir(dataset_root: str | Path) -> list[SampleRecord]:
             row = _obs_identity(h5ad_path)
         label = _canonical_label(row.get("Response", ""))
         if label is None:
-            continue
+            if require_label:
+                continue
+            label = "UNKNOWN"
         records.append(
             SampleRecord(
                 h5ad_path=h5ad_path,
@@ -187,17 +196,23 @@ def collect_records(
     *,
     tissue: str | None = "Tumor",
     ici_phase: str | None = "pre",
+    require_label: bool = True,
 ) -> list[SampleRecord]:
     """Load the manifest if it matches files under ``dataset_root``, else scan h5ads."""
     root = Path(dataset_root)
     if Path(manifest_csv).is_file():
         try:
             return load_sample_manifest(
-                root, manifest_csv, tissue=tissue, ici_phase=ici_phase, skip_missing=True
+                root,
+                manifest_csv,
+                tissue=tissue,
+                ici_phase=ici_phase,
+                skip_missing=True,
+                require_label=require_label,
             )
         except ValueError:
             pass
-    return records_from_h5ad_dir(root)
+    return records_from_h5ad_dir(root, require_label=require_label)
 
 
 def _obs_identity(h5ad_path: Path) -> dict[str, str]:

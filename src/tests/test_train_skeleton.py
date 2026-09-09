@@ -13,7 +13,7 @@ from src.train.dataset import (
     split_by_patient,
 )
 from src.train.loop import TrainConfig, fit
-from src.train.metrics import classification_metrics, confusion_counts
+from src.train.metrics import classification_metrics, confusion_counts, select_threshold
 
 
 def _toy_sample(sample_id: str, patient_id: str, label: str, seed: int) -> AnnDataSample:
@@ -42,6 +42,18 @@ def test_classification_metrics_acc_auprc_f1():
     assert metrics["auroc"] == pytest.approx(1.0)
     matrix = confusion_counts(y_true, y_prob)
     assert matrix.tolist() == [[2, 0], [0, 2]]
+
+
+def test_select_threshold_max_f1_when_scores_are_below_half():
+    y_true = np.array([0, 0, 1, 1])
+    y_prob = np.array([0.10, 0.20, 0.30, 0.40])
+    assert classification_metrics(y_true, y_prob, threshold=0.5)["f1"] == 0.0
+    chosen = select_threshold(y_true, y_prob, strategy="max_f1")
+    assert chosen < 0.5
+    assert classification_metrics(y_true, y_prob, threshold=chosen)["f1"] == 1.0
+    assert select_threshold(y_true, y_prob, strategy="fixed", fixed=0.5) == 0.5
+    youden = select_threshold(y_true, y_prob, strategy="youden")
+    assert classification_metrics(y_true, y_prob, threshold=youden)["f1"] == 1.0
 
 
 def test_split_by_patient_is_disjoint():
@@ -224,7 +236,20 @@ def test_train_writes_checkpoints_and_history(tmp_path):
     assert (tmp_path / "confusion_matrix_val.png").is_file()
     assert (tmp_path / "history_curves.png").is_file()
     assert (tmp_path / "metrics_by_split.png").is_file()
+    assert (tmp_path / "threshold.json").is_file()
+    assert 0.0 <= result.threshold <= 1.0
     assert result.output_dir == tmp_path
+
+    from src.train.loop import load_checkpoint, predict
+
+    saved = load_checkpoint(tmp_path)
+    assert saved.threshold == result.threshold
+    assert saved.gene_universe.names == result.gene_universe.names
+    scored = predict(samples, saved, output_dir=tmp_path / "infer", log=False)
+    assert (tmp_path / "infer" / "predictions.csv").is_file()
+    assert (tmp_path / "infer" / "predict.json").is_file()
+    assert len(scored["rows"]) == 4
+    assert {row["pred"] for row in scored["rows"]} <= {"R", "NR"}
 
 
 def test_cli_parse_defaults():
@@ -234,7 +259,21 @@ def test_cli_parse_defaults():
     assert args.gene_strategy == "hvg"
     assert args.sampling_mode == "random"
     assert args.pooling == "mean"
+    assert args.readout == "cell"
+    assert args.encoder == "sage"
+    assert args.threshold_strategy == "max_f1"
     assert args.test_fraction == 0.0
+
+
+def test_cli_predict_requires_checkpoint():
+    from src.train.__main__ import parse_predict_args
+
+    with pytest.raises(SystemExit):
+        parse_predict_args([])
+    args = parse_predict_args(
+        ["--checkpoint", "outputs/run/best.pt", "--dataset-root", "data/new"]
+    )
+    assert args.checkpoint.name == "best.pt"
 
 
 def test_attention_pool_normalises_per_graph():
@@ -278,6 +317,77 @@ def test_attention_pool_is_not_uniform_mean():
     assert not torch.allclose(pooled.squeeze(0), x.mean(0))
 
 
+def test_classifier_encoders_return_one_logit():
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    import torch
+
+    from src.graph.build_local_graph import build_local_graph
+    from src.train.model import SampleGraphClassifier
+
+    sample = _toy_sample("S1", "P1", "R", 1)
+    graph = build_local_graph(
+        sample, [0, 1, 2], GeneUniverse(["G1", "G2", "G3", "G4"]), gene_strategy="hvg"
+    )
+    for encoder in ("placeholder", "sage", "gat"):
+        model = SampleGraphClassifier(4, hidden_dim=8, encoder=encoder, num_layers=2)
+        logit = model(graph)
+        assert logit.shape == (1,), encoder
+        cell_x, gene_x, cell_batch, gene_batch = model.encode(graph)
+        assert cell_x.shape[0] == graph["cell"].num_nodes
+        assert gene_x.shape[0] == graph["gene"].num_nodes
+        assert cell_batch.shape[0] == cell_x.shape[0]
+        assert gene_batch.shape[0] == gene_x.shape[0]
+
+
+def test_classifier_readout_both_uses_gene_states():
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+
+    from src.graph.build_local_graph import build_local_graph
+    from src.train.model import SampleGraphClassifier
+
+    sample = _toy_sample("S1", "P1", "R", 1)
+    graph = build_local_graph(
+        sample, [0, 1, 2], GeneUniverse(["G1", "G2", "G3", "G4"]), gene_strategy="hvg"
+    )
+    model = SampleGraphClassifier(4, hidden_dim=8, encoder="sage", readout="both")
+    logit = model(graph)
+    assert logit.shape == (1,)
+    assert model.head[0].in_features == 16
+    _, gene_x, _, gene_batch = model.encode(graph)
+    pooled, _ = model.pool_genes(gene_x, gene_batch)
+    assert pooled.shape == (1, 8)
+
+
+def test_fit_runs_with_sage_encoder():
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    samples = [
+        _toy_sample("S1", "P1", "R", 1),
+        _toy_sample("S2", "P2", "R", 2),
+        _toy_sample("S3", "P3", "NR", 3),
+        _toy_sample("S4", "P4", "NR", 4),
+    ]
+    history = fit(
+        samples,
+        GeneUniverse(["G1", "G2", "G3", "G4"]),
+        config=TrainConfig(
+            hidden_dim=8,
+            num_cells=4,
+            encoder="sage",
+            pooling="attention",
+            batch_size=2,
+            epochs=1,
+            val_fraction=0.5,
+            seed=0,
+        ),
+        log=False,
+    )
+    assert len(history) == 1
+    assert history[0].train["loss"] >= 0.0
+
+
 def test_classifier_attention_pooling_returns_one_logit():
     pytest.importorskip("torch")
     pytest.importorskip("torch_geometric")
@@ -290,7 +400,7 @@ def test_classifier_attention_pooling_returns_one_logit():
     graph = build_local_graph(
         sample, [0, 1, 2], GeneUniverse(["G1", "G2", "G3", "G4"]), gene_strategy="hvg"
     )
-    model = SampleGraphClassifier(4, hidden_dim=8, pooling="attention")
+    model = SampleGraphClassifier(4, hidden_dim=8, pooling="attention", encoder="placeholder")
     logit = model(graph)
     assert logit.shape == (1,)
     cell_x, batch = model.encode_cells(graph)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Literal, Mapping
 
 import numpy as np
 from sklearn.metrics import (
@@ -11,9 +11,11 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
     roc_auc_score,
+    roc_curve,
 )
 
 METRIC_KEYS = ("acc", "auroc", "auprc", "f1", "loss")
+ThresholdStrategy = Literal["max_f1", "youden", "fixed"]
 
 
 def classification_metrics(
@@ -38,6 +40,44 @@ def classification_metrics(
         metrics["auroc"] = float(roc_auc_score(y_int, y_prob))
         metrics["auprc"] = float(average_precision_score(y_int, y_prob))
     return metrics
+
+
+def select_threshold(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    *,
+    strategy: ThresholdStrategy = "max_f1",
+    fixed: float = 0.5,
+) -> float:
+    """Choose an R/NR cutoff from validation scores.
+
+    ``max_f1`` maximises F1. ``youden`` maximises TPR - FPR. ``fixed`` keeps
+    ``fixed`` (default 0.5). AUROC/AUPRC do not use this cutoff.
+    """
+    if strategy == "fixed":
+        return float(fixed)
+    y_int = np.asarray(y_true).reshape(-1).astype(np.int64)
+    scores = np.asarray(y_prob, dtype=np.float64).reshape(-1)
+    if y_int.size == 0 or len(np.unique(y_int)) < 2:
+        return float(fixed)
+    if strategy == "youden":
+        fpr, tpr, thresholds = roc_curve(y_int, scores)
+        idx = int(np.nanargmax(tpr - fpr))
+        chosen = thresholds[idx]
+        if not np.isfinite(chosen):
+            return float(fixed)
+        return float(np.clip(chosen, 0.0, 1.0))
+    if strategy != "max_f1":
+        raise ValueError("strategy must be 'max_f1', 'youden', or 'fixed'")
+    candidates = np.unique(np.concatenate(([0.0], scores, [1.0])))
+    best_score = -1.0
+    best_thr = float(fixed)
+    for thr in candidates:
+        f1 = f1_score(y_int, (scores >= thr).astype(np.int64), zero_division=0)
+        if f1 > best_score:
+            best_score = float(f1)
+            best_thr = float(thr)
+    return best_thr
 
 
 def confusion_counts(

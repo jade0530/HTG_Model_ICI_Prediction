@@ -1,0 +1,192 @@
+{
+  "train": [
+    {
+      "sample_id": "GSM6213988",
+      "patient_key": "GSE205506::P30",
+      "label": "R"
+    },
+    {
+      "sample_id": "GSM6213994",
+      "patient_key": "GSE205506::P32",
+      "label": "R"
+    },
+    {
+      "sample_id": "GSM6213995",
+      "patient_key": "GSE205506::P33",
+      "label": "R"
+    },
+    {
+      "sample_id": "h18A_P",
+      "patient_key": "GSE246613::18",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_8::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_8",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_5::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_5",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_9::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_9",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_7::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_7",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_6::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_6",
+      "label": "NR"
+    },
+    {
+      "sample_id": "10X_HEN061",
+      "patient_key": "franken_et_al::5",
+      "label": "NR"
+    },
+    {
+      "sample_id": "10X_HEN074",
+      "patient_key": "franken_et_al::6",
+      "label": "NR"
+    },
+    {
+      "sample_id": "10X_HEN004",
+      "patient_key": "franken_et_al::7",
+      "label": "R"
+    },
+    {
+      "sample_id": "10X_HEN027",
+      "patient_key": "franken_et_al::9",
+      "label": "R"
+    },
+    {
+      "sample_id": "scrCMA036",
+      "patient_key": "pozniak_et_al::14.0",
+      "label": "NR"
+    },
+    {
+      "sample_id": "scrCMA040",
+      "patient_key": "pozniak_et_al::16.0",
+      "label": "NR"
+    },
+    {
+      "sample_id": "scrCMA041",
+      "patient_key": "pozniak_et_al::16.0",
+      "label": "NR"
+    },
+    {
+      "sample_id": "sc5rCMA070",
+      "patient_key": "pozniak_et_al::21.0",
+      "label": "R"
+    },
+    {
+      "sample_id": "scrCMA077",
+      "patient_key": "pozniak_et_al::23.0",
+      "label": "NR"
+    },
+    {
+      "sample_id": "scrCMA090",
+      "patient_key": "pozniak_et_al::26.0",
+      "label": "NR"
+    },
+    {
+      "sample_id": "scrCMA120",
+      "patient_key": "pozniak_et_al::33.0",
+      "label": "NR"
+    },
+    {
+      "sample_id": "MO_MCC_076",
+      "patient_key": "GSE235090::MO_MCC_076",
+      "label": "R"
+    },
+    {
+      "sample_id": "MO_MCC_077",
+      "patient_key": "GSE235090::MO_MCC_077",
+      "label": "R"
+    },
+    {
+      "sample_id": "MO_MCC_078",
+      "patient_key": "GSE235090::MO_MCC_078",
+      "label": "R"
+    },
+    {
+      "sample_id": "MO_MCC_079Pre",
+      "patient_key": "GSE235090::MO_MCC_079",
+      "label": "R"
+    },
+    {
+      "sample_id": "MO_MCC_081Pre",
+      "patient_key": "GSE235090::MO_MCC_081",
+      "label": "R"
+    },
+    {
+      "sample_id": "MO_MCC_085Pre",
+      "patient_key": "GSE235090::MO_MCC_085",
+      "label": "R"
+    }
+  ],
+  "val": [
+    {
+      "sample_id": "GSM6213991",
+      "patient_key": "GSE205506::P31",
+      "label": "NR"
+    },
+    {
+      "sample_id": "h11B_P",
+      "patient_key": "GSE246613::11",
+      "label": "R"
+    },
+    {
+      "sample_id": "h15A_P",
+      "patient_key": "GSE246613::15",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_10::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_10",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_14::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_14",
+      "label": "NR"
+    },
+    {
+      "sample_id": "BIOKEY_15::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_15",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_12::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_12",
+      "label": "R"
+    },
+    {
+      "sample_id": "BIOKEY_11::pre",
+      "patient_key": "Bassez_et_al::BIOKEY_11",
+      "label": "R"
+    },
+    {
+      "sample_id": "10X_HEN079",
+      "patient_key": "franken_et_al::8",
+      "label": "R"
+    },
+    {
+      "sample_id": "scrCMA068",
+      "patient_key": "pozniak_et_al::20.0",
+      "label": "R"
+    },
+    {
+      "sample_id": "scrCMA109",
+      "patient_key": "pozniak_et_al::30.0",
+      "label": "R"
+    }
+  ],
+  "test": []
+}
