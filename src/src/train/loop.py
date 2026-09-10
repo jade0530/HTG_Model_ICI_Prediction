@@ -93,8 +93,15 @@ class SavedRun:
 
 
 def resolve_device(device: str) -> torch.device:
-    if device == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    choice = device.strip().lower()
+    if choice in {"cpu", "cpu:0"}:
+        return torch.device("cpu")
+    if choice in {"auto", "cuda", "gpu", "gpu1", "cuda:0", "cuda:1"}:
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if choice != "auto":
+            raise RuntimeError(f"CUDA was requested ({device}) but is not available")
+        return torch.device("cpu")
     return torch.device(device)
 
 
@@ -298,6 +305,9 @@ def train(
     config = config or TrainConfig()
     seed_everything(config.seed)
     device = resolve_device(config.device)
+    if log:
+        gpu = torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu"
+        print(f"device={device} ({gpu})")
     if config.test_fraction > 0:
         train_items, val_items, test_items = split_by_patient(
             items,

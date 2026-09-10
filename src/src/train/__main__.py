@@ -61,7 +61,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--test-fraction", type=float, default=0.0)
     parser.add_argument("--n-hvg", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help="auto/cuda use GPU 1; cpu forces CPU",
+    )
     parser.add_argument(
         "--threshold-strategy",
         choices=("max_f1", "youden", "fixed"),
@@ -92,7 +97,12 @@ def parse_predict_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "outputs" / "predict")
     parser.add_argument("--tissue", default="all")
     parser.add_argument("--ici-phase", default="all")
-    parser.add_argument("--device", default=None, help="Override the checkpoint device (cpu/cuda/auto)")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default=None,
+        help="Override the checkpoint device. auto/cuda use GPU 1; cpu forces CPU",
+    )
     return parser.parse_args(argv)
 
 
