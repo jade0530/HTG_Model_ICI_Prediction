@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from src.data.sampler import SAMPLING_MODES
 from src.train.dataset import DEFAULT_MANIFEST, REPO_ROOT, collect_records
 from src.train.loop import TrainConfig, predict, train
 
@@ -23,7 +24,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tissue", default="Tumor")
     parser.add_argument("--ici-phase", default="pre")
     parser.add_argument("--hidden-dim", type=int, default=64)
-    parser.add_argument("--num-cells", type=int, default=256)
+    parser.add_argument("--num-cells", type=int, default=256, help="Cell subsample size. Ignored by whole_sample and by_cell_type")
     parser.add_argument("--pooling", choices=("mean", "attention"), default="mean")
     parser.add_argument(
         "--readout",
@@ -38,9 +39,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gene-strategy", choices=("hvg", "expressed"), default="hvg")
     parser.add_argument(
         "--sampling-mode",
-        choices=("random", "proportional", "by_cell_type"),
+        choices=SAMPLING_MODES,
         default="random",
-        help="random cells, type-proportional mix, or one graph per cell type",
+        help="random cells, type-proportional mix, all cells in the sample, or local graphs per cell type merged into one sample graph",
     )
     parser.add_argument(
         "--cell-type-level",
@@ -52,10 +53,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--cell-type",
         action="append",
         default=None,
-        help="Keep only this cell type for by_cell_type. Repeat to pass several types",
+        help="Keep only this cell type when aggregating by_cell_type local graphs. Repeat to pass several types",
     )
     parser.add_argument("--batch-size", type=int, default=2)
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=30, help="Maximum training epochs")
+    parser.add_argument("--patience", type=int, default=5, help="Early-stopping patience on validation AUPRC")
+    parser.add_argument(
+        "--min-delta",
+        type=float,
+        default=0.005,
+        help="Minimum validation-AUPRC improvement required to reset patience",
+    )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--val-fraction", type=float, default=0.25)
     parser.add_argument("--test-fraction", type=float, default=0.0)
@@ -76,6 +84,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--no-cache-samples", action="store_true")
     parser.add_argument("--no-pos-weight", action="store_true")
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Record per-graph size and one forward/backward memory+runtime pass before training",
+    )
     return parser.parse_args(argv)
 
 
@@ -132,6 +145,8 @@ def main_train(argv: list[str] | None = None) -> None:
             cell_types=tuple(args.cell_type or ()),
             batch_size=args.batch_size,
             epochs=args.epochs,
+            patience=args.patience,
+            min_delta=args.min_delta,
             lr=args.lr,
             val_fraction=args.val_fraction,
             test_fraction=args.test_fraction,
@@ -142,12 +157,14 @@ def main_train(argv: list[str] | None = None) -> None:
             device=args.device,
             threshold=args.threshold,
             threshold_strategy=args.threshold_strategy,
+            profile=args.profile,
         ),
         output_dir=args.output_dir,
     )
     print(
-        f"best_epoch={result.best_epoch} threshold={result.threshold:.4f} "
-        f"output_dir={result.output_dir}"
+        f"best_epoch={result.best_epoch} stop_epoch={result.stop_epoch} "
+        f"best_val_auprc={'nan' if result.best_val_auprc != result.best_val_auprc else f'{result.best_val_auprc:.4f}'} "
+        f"threshold={result.threshold:.4f} output_dir={result.output_dir}"
     )
 
 

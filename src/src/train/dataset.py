@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, Sequence
 
@@ -21,10 +21,11 @@ from src.data.data_loader import (
     SampleData,
     sample_from_anndata,
 )
-from src.data.sampler import CellSampler
+from src.data.sampler import SAMPLING_MODES, CellSampler, select_cells
+from src.graph.build_global_graph import build_sample_global_graph
 from src.graph.build_local_graph import GeneStrategy, GeneUniverse, build_local_graph
 
-SamplingMode = Literal["random", "proportional", "by_cell_type"]
+SamplingMode = Literal["random", "proportional", "by_cell_type", "whole_sample"]
 CellTypeLevel = Literal["fine", "main"]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -309,10 +310,11 @@ def load_record(
 
 @dataclass(frozen=True)
 class GraphView:
-    """One local graph: a sample, optionally restricted to one cell type."""
+    """One sample-level graph, built from one or more local cell-gene graphs."""
 
     item_index: int
     cell_type: str | None = None
+    cell_types: tuple[str, ...] = ()
 
 
 def _unique_labels(values: Sequence[object]) -> tuple[str, ...]:
@@ -350,17 +352,20 @@ def item_cell_types(
 
 
 class SampleGraphDataset(Dataset):
-    """Each access resamples cells and builds one sample-level graph.
+    """Each access resamples cells, builds local graphs, then merges one sample HTG.
 
     Items may be already-loaded ``SampleData`` objects or ``SampleRecord`` rows
     from the manifest. Records are read from disk on demand.
 
     ``random`` uses ``CellSampler.sample``. ``proportional`` uses
-    ``cell_type_proportional_sample``. ``by_cell_type`` expands each sample into
-    one graph per cell type via ``sample_by_cell_type`` (every cell of that
-    type; ``num_cells`` is not applied). HVGs are per sample and cached with
-    the loaded matrix. Training redraws random/proportional cell subsets;
-    validation uses a fixed ``view_index``.
+    ``cell_type_proportional_sample``. ``whole_sample`` keeps every cell
+    (``num_cells`` is ignored). ``by_cell_type`` builds one local graph per
+    cell type (every cell of that type; ``num_cells`` is not applied) and
+    aggregates them by sharing gene nodes. After cell indices are chosen, every
+    mode calls the same ``build_local_graph`` path. Training redraws
+    random/proportional cell subsets; validation uses a fixed ``view_index``.
+    ``whole_sample`` is deterministic in both splits. Pass ``hvg_names`` to
+    apply a frozen training-fold HVG list to every sample.
     """
 
     def __init__(
@@ -377,12 +382,15 @@ class SampleGraphDataset(Dataset):
         view_index: int = 0,
         seed: int = 0,
         n_hvg: int = DEFAULT_N_HVG,
+        hvg_names: Sequence[str] | None = None,
         cache_samples: bool = False,
     ) -> None:
         if not items:
             raise ValueError("SampleGraphDataset requires at least one sample")
-        if sampling_mode not in ("random", "proportional", "by_cell_type"):
-            raise ValueError("sampling_mode must be 'random', 'proportional', or 'by_cell_type'")
+        if sampling_mode not in SAMPLING_MODES:
+            raise ValueError(
+                "sampling_mode must be 'random', 'proportional', 'by_cell_type', or 'whole_sample'"
+            )
         self.items = list(items)
         self.sampler = sampler
         self.gene_universe = gene_universe
@@ -393,6 +401,7 @@ class SampleGraphDataset(Dataset):
         self.training = training
         self.view_index = int(view_index)
         self.n_hvg = int(n_hvg)
+        self.hvg_names = None if not hvg_names else tuple(str(name) for name in hvg_names)
         self.cache_samples = cache_samples
         self._rng = np.random.default_rng(seed)
         self._cache: dict[int, SampleData] = {}
@@ -407,7 +416,9 @@ class SampleGraphDataset(Dataset):
             types = item_cell_types(item, self.annotation_keys)
             if allowed is not None:
                 types = tuple(name for name in types if name in allowed)
-            views.extend(GraphView(index, name) for name in types)
+            if not types:
+                continue
+            views.append(GraphView(index, cell_types=types))
         if not views:
             raise ValueError("by_cell_type produced no cell-type graphs")
         return views
@@ -416,7 +427,7 @@ class SampleGraphDataset(Dataset):
         return len(self.views)
 
     def frozen_hvgs(self) -> dict[str, tuple[str, ...]]:
-        """Sample-id to that sample's frozen HVG names."""
+        """Sample-id to the HVG names used to build that sample's graph."""
         mapping: dict[str, tuple[str, ...]] = {}
         for index in range(len(self.items)):
             sample = self._sample(index)
@@ -426,44 +437,48 @@ class SampleGraphDataset(Dataset):
     def _sample(self, index: int) -> SampleData:
         item = self.items[index]
         if not isinstance(item, SampleRecord):
+            if self.hvg_names is not None and isinstance(item, AnnDataSample):
+                return replace(item, hvg_names=self.hvg_names)
             return item
         if self.cache_samples and index in self._cache:
             return self._cache[index]
-        hvg_names = None if self.gene_strategy == "hvg" else ()
+        if self.hvg_names is not None:
+            hvg_names = self.hvg_names
+        elif self.gene_strategy == "hvg":
+            hvg_names = None
+        else:
+            hvg_names = ()
         sample = load_record(item, hvg_names=hvg_names, n_hvg=self.n_hvg)
         if self.cache_samples:
             self._cache[index] = sample
         return sample
 
     def _cell_indices(self, sample: SampleData, cell_type: str | None) -> np.ndarray:
-        kwargs = {
-            "training": self.training,
-            "view_index": self.view_index,
-            "rng": self._rng if self.training else None,
-        }
-        if self.sampling_mode == "random":
-            return self.sampler.sample(sample.num_cells, **kwargs)
-        if self.sampling_mode == "proportional":
-            return self.sampler.cell_type_proportional_sample(
-                sample.num_cells,
-                cell_annotation=sample.cell_annotation,
-                annotation_keys=self.annotation_keys,
-                **kwargs,
-            )
-        if cell_type is None:
-            raise ValueError("by_cell_type requires a cell_type on the graph view")
-        return self.sampler.sample_by_cell_type(
-            sample.num_cells,
+        return select_cells(
+            sample,
+            mode=self.sampling_mode,
+            sampler=self.sampler,
+            training=self.training,
+            view_index=self.view_index,
+            rng=self._rng if self.training else None,
             cell_type=cell_type,
-            cell_annotation=sample.cell_annotation,
             annotation_keys=self.annotation_keys,
-            **kwargs,
         )
 
-    def __getitem__(self, index: int) -> HeteroData:
-        view = self.views[index]
-        sample = self._sample(view.item_index)
-        cells = self._cell_indices(sample, view.cell_type)
+    def _local_graphs(self, sample: SampleData, view: GraphView) -> list[HeteroData]:
+        if self.sampling_mode == "by_cell_type":
+            types = view.cell_types or item_cell_types(sample, self.annotation_keys)
+            if self.cell_types is not None:
+                allowed = set(self.cell_types)
+                types = tuple(name for name in types if name in allowed)
+            graphs = [self._local_graph(sample, cell_type) for cell_type in types]
+            if not graphs:
+                raise ValueError("by_cell_type produced no cell-type graphs")
+            return graphs
+        return [self._local_graph(sample, view.cell_type)]
+
+    def _local_graph(self, sample: SampleData, cell_type: str | None) -> HeteroData:
+        cells = self._cell_indices(sample, cell_type)
         graph = build_local_graph(
             sample,
             cells,
@@ -471,8 +486,48 @@ class SampleGraphDataset(Dataset):
             gene_strategy=self.gene_strategy,
         )
         graph["cell"].x = torch.ones((int(graph["cell"].num_nodes), 1), dtype=torch.float32)
-        graph.cell_type = view.cell_type or ""
+        graph.cell_type = cell_type or ""
         return graph
+
+    def __getitem__(self, index: int) -> HeteroData:
+        view = self.views[index]
+        sample = self._sample(view.item_index)
+        return build_sample_global_graph(self._local_graphs(sample, view))
+
+
+def _item_response(item: object) -> str:
+    return str(getattr(item, "label", "UNKNOWN"))
+
+
+def _patient_response(rows: Sequence[object]) -> str:
+    """Majority R/NR for one patient. Ties become ``MIXED``."""
+    counts: dict[str, int] = defaultdict(int)
+    for item in rows:
+        counts[_item_response(item)] += 1
+    if len(counts) == 1:
+        return next(iter(counts))
+    top = max(counts.values())
+    winners = sorted(name for name, count in counts.items() if count == top)
+    return winners[0] if len(winners) == 1 else "MIXED"
+
+
+def _fold_quotas(sizes: np.ndarray, take: int) -> np.ndarray:
+    """Largest-remainder allocation of ``take`` slots across groups."""
+    take = min(max(int(take), 0), int(sizes.sum()) if len(sizes) else 0)
+    quotas = np.zeros(len(sizes), dtype=np.int64)
+    if take == 0 or not len(sizes) or int(sizes.sum()) == 0:
+        return quotas
+    raw = take * sizes / sizes.sum()
+    quotas = np.minimum(sizes, np.floor(raw)).astype(np.int64)
+    leftover = take - int(quotas.sum())
+    remainder = raw - np.floor(raw)
+    for index in np.argsort(-remainder, kind="stable"):
+        if leftover <= 0:
+            break
+        if quotas[index] < sizes[index]:
+            quotas[index] += 1
+            leftover -= 1
+    return quotas
 
 
 def split_by_patient(
@@ -482,28 +537,47 @@ def split_by_patient(
     test_fraction: float = 0.0,
     seed: int = 0,
 ) -> tuple[list, list] | tuple[list, list, list]:
-    """Patient-disjoint split. Every sample of a patient stays in one fold.
+    """Patient-disjoint split, then a light R/NR balance across folds.
 
-    The grouping key is ``dataset_id::patient_id`` when both are available, so
-    ``A01`` in two studies is not treated as one person, while ``A01_neg`` and
-    ``A01_pos`` from the same study cannot leak across train/val/test.
+    Patients are grouped by ``dataset_id::patient_id``. Fold sizes still follow
+    ``val_fraction`` / ``test_fraction``. Within those sizes, R and NR patients
+    are allocated in proportion to how often each class appears, so a seed
+    shuffle cannot dump every responder into one fold.
     """
     if not 0 < val_fraction < 1 or test_fraction < 0 or val_fraction + test_fraction >= 1:
         raise ValueError("val_fraction and test_fraction must split (0, 1)")
     grouped: dict[str, list] = defaultdict(list)
     for item in items:
         grouped[patient_key(item)].append(item)
-    keys = np.array(sorted(grouped), dtype=object)
-    rng = np.random.default_rng(seed)
-    rng.shuffle(keys)
-    n_patients = len(keys)
+    n_patients = len(grouped)
     if n_patients < 2:
         raise ValueError("need at least two patients to form a train/val split")
     n_test = min(max(int(round(n_patients * test_fraction)), 0), n_patients - 2)
     n_val = min(max(int(round(n_patients * val_fraction)), 1), n_patients - n_test - 1)
-    test_keys = set(keys[:n_test].tolist())
-    val_keys = set(keys[n_test : n_test + n_val].tolist())
-    train_keys = set(keys[n_test + n_val :].tolist())
+
+    by_label: dict[str, list[str]] = defaultdict(list)
+    for key in sorted(grouped):
+        by_label[_patient_response(grouped[key])].append(key)
+    rng = np.random.default_rng(seed)
+    strata = sorted(by_label)
+    shuffled: list[list[str]] = []
+    for label in strata:
+        keys = np.array(by_label[label], dtype=object)
+        rng.shuffle(keys)
+        shuffled.append(keys.tolist())
+    sizes = np.array([len(keys) for keys in shuffled], dtype=np.int64)
+    test_take = _fold_quotas(sizes, n_test)
+    remain = sizes - test_take
+    val_take = _fold_quotas(remain, n_val)
+
+    test_keys: set[str] = set()
+    val_keys: set[str] = set()
+    train_keys: set[str] = set()
+    for keys, n_te, n_va in zip(shuffled, test_take.tolist(), val_take.tolist()):
+        test_keys.update(keys[:n_te])
+        val_keys.update(keys[n_te : n_te + n_va])
+        train_keys.update(keys[n_te + n_va :])
+
     train = [item for key, rows in grouped.items() if key in train_keys for item in rows]
     val = [item for key, rows in grouped.items() if key in val_keys for item in rows]
     if test_fraction <= 0:

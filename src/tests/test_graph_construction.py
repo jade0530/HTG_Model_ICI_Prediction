@@ -3,7 +3,7 @@ import pytest
 from scipy import sparse
 
 from src.data.data_loader import AnnDataSample, sample_from_anndata, select_sample_hvgs
-from src.data.sampler import CellSampler
+from src.data.sampler import CellSampler, select_cells
 from src.graph.build_local_graph import GeneUniverse, build_local_graph, summarize_local_graph
 
 
@@ -44,7 +44,27 @@ def test_graph_has_consistent_gene_ids_and_nonzero_weighted_reverse_edges(as_spa
     assert graph.y.tolist() == [1.0]
     summary = summarize_local_graph(graph)
     assert summary["num_expression_edges"] == 3
+    assert summary["num_reverse_edges"] == 3
+    assert summary["sample_id"] == "S1"
     assert summary["expression_density"] == 0.5
+
+
+def test_whole_sample_selects_every_cell_and_ignores_num_cells():
+    sampler = CellSampler(num_cells=2, seed=13)
+    sample = make_sample(np.array([[2.0, 9.0, 0.0, 1.0], [0.0, 8.0, 3.0, 0.0], [0, 7, 0, 0]]))
+    all_cells = select_cells(sample, mode="whole_sample", sampler=sampler, training=True)
+    random_cells = select_cells(sample, mode="random", sampler=sampler, training=False)
+    again = select_cells(sample, mode="whole_sample", sampler=sampler, training=True)
+    assert np.array_equal(all_cells, np.array([0, 1, 2]))
+    assert np.array_equal(all_cells, again)
+    assert len(random_cells) == 2
+
+
+def test_select_cells_rejects_unknown_mode():
+    sampler = CellSampler(num_cells=2, seed=0)
+    sample = make_sample(np.ones((3, 4), dtype=np.float32))
+    with pytest.raises(ValueError, match="sampling mode must be"):
+        select_cells(sample, mode="all_genes", sampler=sampler, training=False)
 
 
 def test_validation_sampling_is_reproducible_and_small_samples_use_all_cells():
@@ -138,6 +158,19 @@ def test_cell_type_proportional_sample_is_stratified_and_reproducible():
     assert not np.array_equal(first, other_view)
     assert (sampled_labels == "T").sum() == 3
     assert (sampled_labels == "B").sum() == 2
+
+
+def test_proportional_sampling_ignores_confidence_scores():
+    labels = np.array(["T"] * 6 + ["B"] * 4)
+    low = {"predicted_labels": labels, "conf_score": np.linspace(0.01, 0.1, 10)}
+    high = {"predicted_labels": labels, "conf_score": np.linspace(0.9, 1.0, 10)}
+    labels_only = {"predicted_labels": labels}
+    sampler = CellSampler(num_cells=5, seed=13)
+    first = sampler.cell_type_proportional_sample(10, training=False, cell_annotation=low)
+    second = sampler.cell_type_proportional_sample(10, training=False, cell_annotation=high)
+    third = sampler.cell_type_proportional_sample(10, training=False, cell_annotation=labels_only)
+    assert np.array_equal(first, second)
+    assert np.array_equal(first, third)
 
 
 def test_sample_by_cell_type_builds_type_specific_indices():
@@ -349,3 +382,25 @@ def test_sample_from_anndata_cell_type_annotation_keeps_main_types_on_annotation
     ]
     assert set(MAIN_CELL_TYPE_KEYS) <= set(sample.cell_annotation)
     assert set(sample.clinical_metadata) == {"age"}
+
+
+def test_sample_global_graph_shares_genes_and_keeps_one_label():
+    from src.graph.build_global_graph import build_sample_global_graph
+
+    sample = make_sample(np.array([[2.0, 9.0, 0.0, 1.0], [0.0, 8.0, 3.0, 0.0], [0, 7, 0, 0]]))
+    universe = GeneUniverse(["G1", "G2", "G3", "G4"])
+    t_graph = build_local_graph(sample, [0, 2], universe, gene_strategy="expressed")
+    t_graph.cell_type = "T"
+    b_graph = build_local_graph(sample, [1], universe, gene_strategy="expressed")
+    b_graph.cell_type = "B"
+    merged = build_sample_global_graph([t_graph, b_graph])
+    assert merged.sample_id == "S1"
+    assert merged.y.tolist() == [1.0]
+    assert int(merged["cell"].num_nodes) == 3
+    assert "sample" not in merged.node_types
+    assert ("gene", "pooled_in", "sample") not in merged.edge_types
+    assert merged["gene"].global_id.tolist() == [0, 1, 2]
+    assert getattr(merged["cell"], "batch", None) is None
+    assert set(merged.cell_type.split(",")) == {"B", "T"}
+    assert merged["cell"].local_graph.max().item() == 1
+

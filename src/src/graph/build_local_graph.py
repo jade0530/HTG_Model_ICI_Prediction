@@ -16,9 +16,11 @@ GeneStrategy = Literal["expressed", "hvg"]
 
 
 class GraphSummary(TypedDict):
+    sample_id: str
     num_cells: int
     num_genes: int
     num_expression_edges: int
+    num_reverse_edges: int
     expression_density: float
     min_edge_weight: float
     max_edge_weight: float
@@ -136,11 +138,13 @@ def build_local_graph(
 
 
 def summarize_local_graph(graph: HeteroData) -> GraphSummary:
-    """Structural and memory diagnostics for one local graph."""
+    """Structural and memory diagnostics for one local or sample graph."""
     relation = graph["cell", "expresses", "gene"]
+    reverse = graph["gene", "expressed_by", "cell"]
     num_cells = int(graph["cell"].num_nodes)
     num_genes = int(graph["gene"].num_nodes)
     num_edges = int(relation.edge_index.shape[1])
+    num_reverse = int(reverse.edge_index.shape[1])
     weights = relation.edge_weight
     tensor_bytes = sum(
         value.numel() * value.element_size()
@@ -149,11 +153,21 @@ def summarize_local_graph(graph: HeteroData) -> GraphSummary:
         if isinstance(value, torch.Tensor)
     )
     return GraphSummary(
+        sample_id=str(getattr(graph, "sample_id", "")),
         num_cells=num_cells,
         num_genes=num_genes,
         num_expression_edges=num_edges,
-        expression_density=(num_edges / (num_cells * num_genes)),
-        min_edge_weight=float(weights.min().item()),
-        max_edge_weight=float(weights.max().item()),
+        num_reverse_edges=num_reverse,
+        expression_density=(num_edges / (num_cells * num_genes)) if num_cells and num_genes else 0.0,
+        min_edge_weight=float(weights.min().item()) if num_edges else 0.0,
+        max_edge_weight=float(weights.max().item()) if num_edges else 0.0,
         tensor_bytes=int(tensor_bytes),
     )
+
+
+def per_sample_graph_stats(graph: HeteroData) -> list[GraphSummary]:
+    """One summary per biological sample, including graphs already collated by PyG."""
+    cell_batch = getattr(graph["cell"], "batch", None)
+    if cell_batch is None:
+        return [summarize_local_graph(graph)]
+    return [summarize_local_graph(item) for item in graph.to_data_list()]

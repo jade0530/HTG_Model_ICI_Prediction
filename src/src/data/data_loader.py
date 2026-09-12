@@ -175,8 +175,9 @@ def _hvgs_from_var(adata: object, n_hvg: int) -> tuple[str, ...]:
 def select_sample_hvgs(adata: object, *, n_hvg: int = DEFAULT_N_HVG) -> tuple[str, ...]:
     """Select HVGs with scanpy Seurat flavour on this matrix.
 
-    Call on one sample to freeze that sample's gene list. If ``highly_variable``
-    is already on ``adata.var``, ``_resolve_hvg_names`` reuses it.
+    Call on the training fold (or one sample) to freeze the gene list. If
+    ``highly_variable`` is already on ``adata.var``, ``_resolve_hvg_names``
+    reuses it.
     """
     import scanpy as sc
 
@@ -184,6 +185,70 @@ def select_sample_hvgs(adata: object, *, n_hvg: int = DEFAULT_N_HVG) -> tuple[st
         raise ValueError("n_hvg must be positive")
     sc.pp.highly_variable_genes(adata, n_top_genes=int(n_hvg), flavor="seurat")
     return _hvgs_from_var(adata, n_hvg)
+
+
+def _item_expression_and_genes(item: object) -> tuple[ExpressionMatrix, tuple[str, ...]]:
+    if isinstance(item, AnnDataSample):
+        return item.X, tuple(str(name) for name in item.gene_names)
+    h5ad_path = getattr(item, "h5ad_path", None)
+    if h5ad_path is None:
+        return item.X, tuple(str(name) for name in item.gene_names)
+    import anndata as ad
+
+    adata = ad.read_h5ad(h5ad_path)
+    return adata.X, tuple(str(name) for name in adata.var_names)
+
+
+def _vstack_expression(matrices: Sequence[ExpressionMatrix]) -> ExpressionMatrix:
+    if not matrices:
+        raise ValueError("need at least one expression matrix")
+    if all(sparse.issparse(matrix) for matrix in matrices):
+        return sparse.vstack(list(matrices))
+    dense = [matrix.toarray() if sparse.issparse(matrix) else np.asarray(matrix) for matrix in matrices]
+    return np.concatenate(dense, axis=0)
+
+
+def _union_hvgs(per_sample: Sequence[tuple[str, ...]], n_hvg: int) -> tuple[str, ...]:
+    order: list[str] = []
+    freq: dict[str, int] = {}
+    for names in per_sample:
+        for name in names:
+            if name not in freq:
+                order.append(name)
+                freq[name] = 0
+            freq[name] += 1
+    ranked = sorted(order, key=lambda name: (-freq[name], order.index(name)))
+    return tuple(ranked[:n_hvg])
+
+
+def select_train_hvgs(items: Sequence[object], *, n_hvg: int = DEFAULT_N_HVG) -> tuple[str, ...]:
+    """Fit one HVG list on training samples and reuse it for val/test.
+
+    Shared gene panels are concatenated, then scanpy Seurat HVG is run once.
+    Mismatched panels fall back to the frequency-ranked union of per-sample HVGs.
+    """
+    if not items:
+        raise ValueError("select_train_hvgs requires at least one training sample")
+    if n_hvg <= 0:
+        raise ValueError("n_hvg must be positive")
+    payloads = [_item_expression_and_genes(item) for item in items]
+    names_list = [names for _, names in payloads]
+    first = names_list[0]
+    import anndata as ad
+
+    if all(names == first for names in names_list[1:]):
+        adata = ad.AnnData(_vstack_expression([matrix for matrix, _ in payloads]))
+        adata.var_names = list(first)
+        return select_sample_hvgs(adata, n_hvg=n_hvg)
+    per_sample = []
+    for matrix, names in payloads:
+        adata = ad.AnnData(matrix)
+        adata.var_names = list(names)
+        per_sample.append(select_sample_hvgs(adata, n_hvg=n_hvg))
+    selected = _union_hvgs(per_sample, n_hvg)
+    if not selected:
+        raise ValueError("training fold produced an empty HVG list")
+    return selected
 
 
 def _resolve_hvg_names(

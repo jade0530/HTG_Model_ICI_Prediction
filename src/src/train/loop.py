@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import time
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields
 from pathlib import Path
 from typing import Sequence
@@ -13,9 +14,9 @@ import torch
 from torch.nn import functional as F
 from torch_geometric.loader import DataLoader
 
-from src.data.data_loader import DEFAULT_N_HVG, SampleData
+from src.data.data_loader import DEFAULT_N_HVG, SampleData, select_train_hvgs
 from src.data.sampler import CellSampler
-from src.graph.build_local_graph import GeneStrategy, GeneUniverse
+from src.graph.build_local_graph import GeneStrategy, GeneUniverse, per_sample_graph_stats
 from src.train.dataset import (
     CellTypeLevel,
     SamplingMode,
@@ -33,7 +34,11 @@ from src.train.report import write_predictions, write_run_report
 
 @dataclass
 class TrainConfig:
-    """Stage 1 training knobs. ``encoder`` is ``sage``, ``gat``, or ``placeholder``."""
+    """Stage 1 training knobs. ``encoder`` is ``sage``, ``gat``, or ``placeholder``.
+
+    ``epochs`` is the maximum. Early stopping watches validation AUPRC with
+    ``patience`` and ``min_delta``.
+    """
 
     hidden_dim: int = 64
     num_cells: int = 512
@@ -48,17 +53,21 @@ class TrainConfig:
     cell_type_level: CellTypeLevel = "fine"
     cell_types: tuple[str, ...] = ()
     batch_size: int = 2
-    epochs: int = 5
+    epochs: int = 30
+    patience: int = 5
+    min_delta: float = 0.005
     lr: float = 1e-3
     val_fraction: float = 0.25
     test_fraction: float = 0.0
     n_hvg: int = DEFAULT_N_HVG
+    hvg_names: tuple[str, ...] = ()
     cache_samples: bool = True
     use_pos_weight: bool = True
     seed: int = 0
     device: str = "auto"
     threshold: float = 0.5
     threshold_strategy: ThresholdStrategy = "max_f1"
+    profile: bool = False
 
 
 @dataclass
@@ -75,6 +84,9 @@ class TrainResult:
     gene_universe: GeneUniverse
     hvg_by_sample: dict[str, tuple[str, ...]]
     best_epoch: int
+    best_val_auprc: float = float("nan")
+    stop_epoch: int = 0
+    stopped_early: bool = False
     threshold: float = 0.5
     test: dict[str, float] | None = None
     output_dir: Path | None = None
@@ -112,11 +124,33 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _finite_auprc(metrics: dict[str, float]) -> float:
+    """Validation AUPRC, or NaN when the metric is missing or undefined."""
+    value = metrics.get("auprc", float("nan"))
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return value if value == value else float("nan")
+
+
+def auprc_improved(current: float, best: float, min_delta: float) -> bool:
+    """True iff ``current`` is finite and exceeds ``best`` by more than ``min_delta``.
+
+    NaN is never an improvement. The first finite AUPRC beats ``-inf``.
+    """
+    if current != current:
+        return False
+    return float(current) > float(best) + float(min_delta)
+
+
+def _fmt_auprc(value: float) -> str:
+    return "nan" if value != value or value == float("-inf") else f"{float(value):.4f}"
+
+
 def _checkpoint_score(metrics: dict[str, float]) -> float:
-    auprc = metrics.get("auprc", float("nan"))
-    if auprc == auprc:
-        return float(auprc)
-    return float(metrics.get("f1", float("-inf")))
+    """Best-checkpoint score is validation AUPRC. NaN does not rank."""
+    return _finite_auprc(metrics)
 
 
 def run_epoch(
@@ -134,15 +168,18 @@ def run_epoch(
     logits: list[torch.Tensor] = []
     labels: list[torch.Tensor] = []
     for batch in loader:
-        batch = batch.to(device)
-        logit = model(batch)
-        y = batch.y.reshape(-1).to(dtype=logit.dtype)
-        weight = None if pos_weight is None else pos_weight.to(device=device, dtype=logit.dtype)
-        loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=weight)
-        if training:
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        try:
+            batch = batch.to(device)
+            logit = model(batch)
+            y = batch.y.reshape(-1).to(dtype=logit.dtype)
+            weight = None if pos_weight is None else pos_weight.to(device=device, dtype=logit.dtype)
+            loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=weight)
+            if training:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+        except RuntimeError as exc:
+            _reraise_oom(exc, batch)
         losses.append(float(loss.item()) * int(y.numel()))
         logits.append(logit.detach().cpu())
         labels.append(y.detach().cpu())
@@ -165,9 +202,12 @@ def collect_predictions(
     logits: list[torch.Tensor] = []
     labels: list[torch.Tensor] = []
     for batch in loader:
-        batch = batch.to(device)
-        logits.append(model(batch).detach().cpu())
-        labels.append(batch.y.reshape(-1).detach().cpu())
+        try:
+            batch = batch.to(device)
+            logits.append(model(batch).detach().cpu())
+            labels.append(batch.y.reshape(-1).detach().cpu())
+        except RuntimeError as exc:
+            _reraise_oom(exc, batch)
     y_true = torch.cat(labels).numpy()
     y_prob = torch.sigmoid(torch.cat(logits)).numpy()
     return y_true, y_prob
@@ -176,6 +216,8 @@ def collect_predictions(
 def config_from_dict(payload: dict) -> TrainConfig:
     allowed = {item.name for item in dataclass_fields(TrainConfig)}
     values = {key: value for key, value in payload.items() if key in allowed}
+    if "hvg_names" in values and values["hvg_names"] is not None:
+        values["hvg_names"] = tuple(values["hvg_names"])
     if "cell_types" in values and values["cell_types"] is not None:
         values["cell_types"] = tuple(values["cell_types"])
     return TrainConfig(**values)
@@ -213,6 +255,7 @@ def _loader(
         training=training,
         seed=config.seed,
         n_hvg=config.n_hvg,
+        hvg_names=config.hvg_names or None,
         cache_samples=config.cache_samples,
     )
     return DataLoader(dataset, batch_size=config.batch_size, shuffle=training)
@@ -298,9 +341,11 @@ def train(
 ) -> TrainResult:
     """Patient-disjoint train/val(/test), then fit the sample-graph classifier.
 
-    Each sample keeps its own HVG list (scanpy on that sample, then cached).
-    The gene universe is only a shared ID table. The R/NR cutoff is chosen on
-    val after the best checkpoint; epoch logs still use ``threshold``.
+    HVGs and the gene universe are fit on the training fold only; val/test
+    map into that frozen feature set. Training stops when validation AUPRC
+    does not improve by ``min_delta`` for ``patience`` epochs, or when
+    ``epochs`` is reached. The R/NR cutoff is chosen on val after the best
+    checkpoint is reloaded; epoch logs still use ``threshold``.
     """
     config = config or TrainConfig()
     seed_everything(config.seed)
@@ -321,8 +366,13 @@ def train(
         )
         test_items = []
 
+    if config.gene_strategy == "hvg" and not config.hvg_names:
+        config.hvg_names = select_train_hvgs(train_items, n_hvg=config.n_hvg)
     if gene_universe is None:
-        gene_universe = build_gene_universe(list(train_items) + list(val_items) + list(test_items))
+        if config.gene_strategy == "hvg" and config.hvg_names:
+            gene_universe = GeneUniverse(config.hvg_names)
+        else:
+            gene_universe = build_gene_universe(train_items)
 
     out: Path | None = None
     if output_dir is not None:
@@ -349,11 +399,30 @@ def train(
     model = build_classifier(len(gene_universe), config).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     pos_weight = _pos_weight(train_items, config.use_pos_weight)
+    if config.profile:
+        profile_rows = _profile_loaders(
+            {"train": train_loader, "val": val_loader},
+            model=model,
+            device=device,
+            pos_weight=pos_weight,
+            log=log,
+        )
+        if out is not None:
+            _write_profile_csv(out / "graph_profile.csv", profile_rows)
     history: list[EpochResult] = []
     best_epoch = 0
-    best_score = float("-inf")
+    best_val_auprc = float("-inf")
     best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
     best_val_metrics: dict[str, float] = {}
+    patience_count = 0
+    stop_epoch = -1
+    stopped_early = False
+    if config.patience < 1:
+        raise ValueError("patience must be at least 1")
+    if config.min_delta < 0:
+        raise ValueError("min_delta must be non-negative")
+    if config.epochs < 1:
+        raise ValueError("epochs must be at least 1")
 
     for epoch in range(config.epochs):
         train_metrics = run_epoch(
@@ -373,9 +442,34 @@ def train(
         )
         result = EpochResult(epoch=epoch, train=train_metrics, val=val_metrics)
         history.append(result)
+        stop_epoch = epoch
+        val_auprc = _finite_auprc(val_metrics)
+        improved = auprc_improved(val_auprc, best_val_auprc, config.min_delta)
+        if improved:
+            best_val_auprc = val_auprc
+            best_epoch = epoch
+            best_val_metrics = val_metrics
+            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            patience_count = 0
+            if out is not None:
+                _save_checkpoint(
+                    out / "best.pt",
+                    model=model,
+                    config=config,
+                    gene_universe=gene_universe,
+                    epoch=epoch,
+                    metrics=val_metrics,
+                )
+        else:
+            patience_count += 1
         if log:
             print(f"epoch {epoch} {format_metrics('train', train_metrics)}")
             print(f"epoch {epoch} {format_metrics('val', val_metrics)}")
+            print(
+                f"epoch {epoch} val_auprc={_fmt_auprc(val_auprc)} "
+                f"best_val_auprc={_fmt_auprc(best_val_auprc)} "
+                f"best_epoch={best_epoch} patience={patience_count}/{config.patience}"
+            )
         if out is not None:
             _append_history(out / "history.csv", result)
             _save_checkpoint(
@@ -386,14 +480,40 @@ def train(
                 epoch=epoch,
                 metrics=val_metrics,
             )
-        score = _checkpoint_score(val_metrics)
-        if score > best_score:
-            best_score = score
-            best_epoch = epoch
-            best_val_metrics = val_metrics
-            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+        if patience_count >= config.patience:
+            stopped_early = True
+            if log:
+                print(f"Early stopping triggered at epoch {epoch}.")
+                print(
+                    f"Best validation AUPRC = {_fmt_auprc(best_val_auprc)} at epoch {best_epoch}."
+                )
+                print("Reloading best checkpoint.")
+            break
+    else:
+        if log:
+            print(f"Reached max_epochs={config.epochs} without early stopping.")
+            print(
+                f"Best validation AUPRC = {_fmt_auprc(best_val_auprc)} at epoch {best_epoch}."
+            )
+            print("Reloading best checkpoint.")
 
     model.load_state_dict(best_state)
+    reported_best_auprc = best_val_auprc if best_val_auprc != float("-inf") else float("nan")
+    if out is not None:
+        _write_json(
+            out / "early_stopping.json",
+            {
+                "best_epoch": best_epoch,
+                "best_val_auprc": None
+                if reported_best_auprc != reported_best_auprc
+                else reported_best_auprc,
+                "stop_epoch": stop_epoch,
+                "patience": config.patience,
+                "min_delta": config.min_delta,
+                "stopped_early": stopped_early,
+                "max_epochs": config.epochs,
+            },
+        )
     hvg_by_sample = _collect_hvgs(train_loader, val_loader)
 
     def _split_predictions(split_items: Sequence[SampleData | SampleRecord]):
@@ -454,10 +574,136 @@ def train(
         gene_universe=gene_universe,
         hvg_by_sample=hvg_by_sample,
         best_epoch=best_epoch,
+        best_val_auprc=reported_best_auprc,
+        stop_epoch=stop_epoch,
+        stopped_early=stopped_early,
         threshold=chosen_threshold,
         test=test_metrics,
         output_dir=out,
     )
+
+
+def _is_oom(exc: BaseException) -> bool:
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    return "outofmemory" in name or "out of memory" in text or "cuda oom" in text
+
+
+def describe_graph_batch(batch) -> str:
+    """Human-readable per-sample graph sizes, used when a batch OOMs."""
+    rows = per_sample_graph_stats(batch)
+    parts = [
+        (
+            f"{row['sample_id'] or '?'} cells={row['num_cells']} genes={row['num_genes']} "
+            f"cell->gene={row['num_expression_edges']} reverse={row['num_reverse_edges']} "
+            f"tensor_bytes={row['tensor_bytes']}"
+        )
+        for row in rows
+    ]
+    return "graph sizes: " + "; ".join(parts)
+
+
+def _reraise_oom(exc: RuntimeError, batch) -> None:
+    if not _is_oom(exc):
+        raise exc
+    raise RuntimeError(
+        "CUDA/CPU OOM while processing a sample-graph batch. "
+        "No automatic cell cutoff was applied. "
+        + describe_graph_batch(batch)
+    ) from exc
+
+
+def _cuda_bytes(device: torch.device) -> int | None:
+    if device.type != "cuda":
+        return None
+    torch.cuda.synchronize(device)
+    return int(torch.cuda.max_memory_allocated(device))
+
+
+def _profile_loaders(
+    loaders: dict[str, DataLoader],
+    *,
+    model: SampleGraphClassifier,
+    device: torch.device,
+    pos_weight: torch.Tensor | None,
+    log: bool,
+) -> list[dict[str, object]]:
+    """One forward/backward pass per batch; records graph size, runtime, and peak memory."""
+    was_training = model.training
+    model.train(True)
+    rows: list[dict[str, object]] = []
+    for split, loader in loaders.items():
+        for batch_index, batch in enumerate(loader):
+            stats = per_sample_graph_stats(batch)
+            n_graphs = max(len(stats), 1)
+            if device.type == "cuda":
+                torch.cuda.reset_peak_memory_stats(device)
+                torch.cuda.synchronize(device)
+            batch = batch.to(device)
+            started = time.perf_counter()
+            try:
+                logit = model(batch)
+                y = batch.y.reshape(-1).to(dtype=logit.dtype)
+                weight = None if pos_weight is None else pos_weight.to(device=device, dtype=logit.dtype)
+                loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=weight)
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                forward_ms = (time.perf_counter() - started) * 1000.0
+                forward_peak = _cuda_bytes(device)
+                if device.type == "cuda":
+                    torch.cuda.reset_peak_memory_stats(device)
+                backward_started = time.perf_counter()
+                model.zero_grad(set_to_none=True)
+                loss.backward()
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                backward_ms = (time.perf_counter() - backward_started) * 1000.0
+                backward_peak = _cuda_bytes(device)
+            except RuntimeError as exc:
+                _reraise_oom(exc, batch)
+            batch_ms = forward_ms + backward_ms
+            for graph_index, summary in enumerate(stats):
+                row = {
+                    "split": split,
+                    "batch_index": batch_index,
+                    "graph_index": graph_index,
+                    "sample_id": summary["sample_id"],
+                    "num_cells": summary["num_cells"],
+                    "num_genes": summary["num_genes"],
+                    "num_cell_to_gene_edges": summary["num_expression_edges"],
+                    "num_reverse_edges": summary["num_reverse_edges"],
+                    "tensor_bytes": summary["tensor_bytes"],
+                    "batch_graphs": n_graphs,
+                    "forward_peak_bytes": forward_peak,
+                    "backward_peak_bytes": backward_peak,
+                    "forward_ms": round(forward_ms, 3),
+                    "backward_ms": round(backward_ms, 3),
+                    "batch_runtime_ms": round(batch_ms, 3),
+                    "graph_runtime_ms": round(batch_ms / n_graphs, 3),
+                }
+                rows.append(row)
+                if log:
+                    print(
+                        f"profile {split} batch={batch_index} graph={graph_index} "
+                        f"sample={row['sample_id']} cells={row['num_cells']} "
+                        f"genes={row['num_genes']} edges={row['num_cell_to_gene_edges']} "
+                        f"reverse={row['num_reverse_edges']} tensor_bytes={row['tensor_bytes']} "
+                        f"fwd_peak={row['forward_peak_bytes']} bwd_peak={row['backward_peak_bytes']} "
+                        f"batch_ms={row['batch_runtime_ms']}"
+                    )
+            model.zero_grad(set_to_none=True)
+    model.train(was_training)
+    return rows
+
+
+def _write_profile_csv(path: Path, rows: Sequence[dict[str, object]]) -> None:
+    if not rows:
+        return
+    columns = list(rows[0].keys())
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def _collect_hvgs(*loaders: DataLoader) -> dict[str, tuple[str, ...]]:
@@ -530,8 +776,8 @@ def predict(
 ) -> dict[str, object]:
     """Score new samples with a saved run. Graphs are rebuilt, weights are not.
 
-    Each sample uses its own HVGs, mapped onto the frozen training gene universe.
-    The val-tuned cutoff decides R vs NR.
+    New samples use the frozen training HVG list and gene universe. The
+    val-tuned cutoff decides R vs NR.
     """
     saved = run if isinstance(run, SavedRun) else load_checkpoint(run, device=device)
     items = list(items)
@@ -560,7 +806,7 @@ def predict(
             {
                 "sample_id": str(item.sample_id),
                 "patient_key": patient_key(item),
-                "cell_type": view.cell_type or "",
+                "cell_type": view.cell_type or ",".join(view.cell_types),
                 "label": label,
                 "prob_R": float(prob),
                 "pred": "R" if int(pred) == 1 else "NR",
