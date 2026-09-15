@@ -540,14 +540,16 @@ def test_cli_parse_defaults():
     assert args.epochs == 30
     assert args.patience == 5
     assert args.min_delta == 0.005
+    assert args.no_early_stopping is False
 
 
 def test_cli_accepts_whole_sample_and_profile():
     from src.train.__main__ import parse_args
 
-    args = parse_args(["--sampling-mode", "whole_sample", "--profile"])
+    args = parse_args(["--sampling-mode", "whole_sample", "--profile", "--no-early-stopping"])
     assert args.sampling_mode == "whole_sample"
     assert args.profile is True
+    assert args.no_early_stopping is True
 
 
 def test_attention_pool_normalises_per_graph():
@@ -928,6 +930,7 @@ def test_early_stopping_patience_and_best_checkpoint_reload(tmp_path, monkeypatc
         "best_epoch": 1,
         "best_val_auprc": pytest.approx(0.50),
         "stop_epoch": 6,
+        "early_stopping": True,
         "patience": 5,
         "min_delta": 0.005,
         "stopped_early": True,
@@ -1014,5 +1017,83 @@ def test_reaches_max_epochs_without_early_stopping(monkeypatch):
     assert result.best_epoch == 2
     assert result.best_val_auprc == pytest.approx(0.60)
     assert len(result.history) == 3
+
+
+def test_no_early_stopping_flag_runs_all_epochs(monkeypatch):
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    from src.train.loop import train
+
+    samples = [
+        _toy_sample("S1", "P1", "R", 1),
+        _toy_sample("S2", "P2", "R", 2),
+        _toy_sample("S3", "P3", "NR", 3),
+        _toy_sample("S4", "P4", "NR", 4),
+    ]
+    values = [0.20, 0.50, 0.501, 0.502, 0.503, 0.504, 0.504]
+    _scripted_val_auprc(monkeypatch, values)
+    result = train(
+        samples,
+        gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
+        config=TrainConfig(
+            hidden_dim=8,
+            num_cells=4,
+            batch_size=2,
+            epochs=7,
+            early_stopping=False,
+            patience=5,
+            min_delta=0.005,
+            val_fraction=0.5,
+            seed=0,
+            device="cpu",
+            hvg_names=("G1", "G2", "G3"),
+        ),
+        log=False,
+    )
+    assert result.stopped_early is False
+    assert result.stop_epoch == 6
+    assert result.best_epoch == 1
+    assert result.best_val_auprc == pytest.approx(0.50)
+    assert len(result.history) == 7
+    assert [row.val["auprc"] for row in result.history] == values
+
+
+def test_no_early_stopping_flag_runs_all_epochs(monkeypatch):
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    from src.train.loop import train
+
+    samples = [
+        _toy_sample("S1", "P1", "R", 1),
+        _toy_sample("S2", "P2", "R", 2),
+        _toy_sample("S3", "P3", "NR", 3),
+        _toy_sample("S4", "P4", "NR", 4),
+    ]
+    values = [0.20, 0.50, 0.501, 0.502, 0.503, 0.504, 0.504]
+    _scripted_val_auprc(monkeypatch, values)
+    result = train(
+        samples,
+        gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
+        config=TrainConfig(
+            hidden_dim=8,
+            num_cells=4,
+            batch_size=2,
+            epochs=7,
+            early_stopping=False,
+            patience=5,
+            min_delta=0.005,
+            val_fraction=0.5,
+            seed=0,
+            device="cpu",
+            hvg_names=("G1", "G2", "G3"),
+        ),
+        log=False,
+    )
+    assert result.stopped_early is False
+    assert result.stop_epoch == 6
+    assert result.best_epoch == 1
+    assert result.best_val_auprc == pytest.approx(0.50)
+    assert len(result.history) == 7
+    assert [row.val["auprc"] for row in result.history] == values
 
 

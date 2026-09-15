@@ -37,7 +37,7 @@ class TrainConfig:
     """Stage 1 training knobs. ``encoder`` is ``sage``, ``gat``, or ``placeholder``.
 
     ``epochs`` is the maximum. Early stopping watches validation AUPRC with
-    ``patience`` and ``min_delta``.
+    ``patience`` and ``min_delta`` unless ``early_stopping`` is False.
     """
 
     hidden_dim: int = 64
@@ -54,6 +54,7 @@ class TrainConfig:
     cell_types: tuple[str, ...] = ()
     batch_size: int = 2
     epochs: int = 30
+    early_stopping: bool = True
     patience: int = 5
     min_delta: float = 0.005
     lr: float = 1e-3
@@ -342,10 +343,11 @@ def train(
     """Patient-disjoint train/val(/test), then fit the sample-graph classifier.
 
     HVGs and the gene universe are fit on the training fold only; val/test
-    map into that frozen feature set. Training stops when validation AUPRC
+    map into that frozen feature set.     Training stops when validation AUPRC
     does not improve by ``min_delta`` for ``patience`` epochs, or when
-    ``epochs`` is reached. The R/NR cutoff is chosen on val after the best
-    checkpoint is reloaded; epoch logs still use ``threshold``.
+    ``epochs`` is reached. Pass ``early_stopping=False`` to run every epoch.
+    The R/NR cutoff is chosen on val after the best checkpoint is reloaded;
+    epoch logs still use ``threshold``.
     """
     config = config or TrainConfig()
     seed_everything(config.seed)
@@ -417,7 +419,7 @@ def train(
     patience_count = 0
     stop_epoch = -1
     stopped_early = False
-    if config.patience < 1:
+    if config.early_stopping and config.patience < 1:
         raise ValueError("patience must be at least 1")
     if config.min_delta < 0:
         raise ValueError("min_delta must be non-negative")
@@ -465,10 +467,14 @@ def train(
         if log:
             print(f"epoch {epoch} {format_metrics('train', train_metrics)}")
             print(f"epoch {epoch} {format_metrics('val', val_metrics)}")
+            if config.early_stopping:
+                monitor = f"patience={patience_count}/{config.patience}"
+            else:
+                monitor = "early_stopping=off"
             print(
                 f"epoch {epoch} val_auprc={_fmt_auprc(val_auprc)} "
                 f"best_val_auprc={_fmt_auprc(best_val_auprc)} "
-                f"best_epoch={best_epoch} patience={patience_count}/{config.patience}"
+                f"best_epoch={best_epoch} {monitor}"
             )
         if out is not None:
             _append_history(out / "history.csv", result)
@@ -480,7 +486,7 @@ def train(
                 epoch=epoch,
                 metrics=val_metrics,
             )
-        if patience_count >= config.patience:
+        if config.early_stopping and patience_count >= config.patience:
             stopped_early = True
             if log:
                 print(f"Early stopping triggered at epoch {epoch}.")
@@ -508,6 +514,7 @@ def train(
                 if reported_best_auprc != reported_best_auprc
                 else reported_best_auprc,
                 "stop_epoch": stop_epoch,
+                "early_stopping": config.early_stopping,
                 "patience": config.patience,
                 "min_delta": config.min_delta,
                 "stopped_early": stopped_early,

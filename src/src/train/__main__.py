@@ -57,6 +57,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--epochs", type=int, default=30, help="Maximum training epochs")
+    parser.add_argument(
+        "--no-early-stopping",
+        action="store_true",
+        help="Run all --epochs; still save and reload the best validation-AUPRC checkpoint",
+    )
     parser.add_argument("--patience", type=int, default=5, help="Early-stopping patience on validation AUPRC")
     parser.add_argument(
         "--min-delta",
@@ -145,6 +150,7 @@ def main_train(argv: list[str] | None = None) -> None:
             cell_types=tuple(args.cell_type or ()),
             batch_size=args.batch_size,
             epochs=args.epochs,
+            early_stopping=not args.no_early_stopping,
             patience=args.patience,
             min_delta=args.min_delta,
             lr=args.lr,
