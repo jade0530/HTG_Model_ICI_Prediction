@@ -63,7 +63,11 @@ class TrainConfig:
     n_hvg: int = DEFAULT_N_HVG
     hvg_names: tuple[str, ...] = ()
     cache_samples: bool = True
+    # use_pos_weight: bool = True
+    # seed: int = 0
     use_pos_weight: bool = True
+    loss_function: str = "weighted_bce"
+    focal_gamma: float = 2.0
     seed: int = 0
     device: str = "auto"
     threshold: float = 0.5
@@ -154,6 +158,41 @@ def _checkpoint_score(metrics: dict[str, float]) -> float:
     return _finite_auprc(metrics)
 
 
+def focal_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    gamma: float = 2.0,
+    pos_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Binary focal loss with optional positive-class weighting."""
+
+    probs = torch.sigmoid(logits)
+
+    # Probability assigned to the correct class
+    pt = torch.where(targets == 1, probs, 1.0 - probs)
+
+    # Standard BCE without reduction
+    bce = F.binary_cross_entropy_with_logits(
+        logits,
+        targets,
+        reduction="none",
+    )
+
+    # Keep the same positive-class weighting as the current BCE
+    if pos_weight is not None:
+        class_weight = torch.where(
+            targets == 1,
+            pos_weight,
+            torch.ones_like(targets),
+        )
+        bce = bce * class_weight
+
+    # Focus more on difficult examples
+    focal_weight = (1.0 - pt) ** gamma
+
+    return (focal_weight * bce).mean()
+
 def run_epoch(
     model: SampleGraphClassifier,
     loader: DataLoader,
@@ -162,6 +201,7 @@ def run_epoch(
     optimizer: torch.optim.Optimizer | None = None,
     threshold: float = 0.5,
     pos_weight: torch.Tensor | None = None,
+    config: TrainConfig,
 ) -> dict[str, float]:
     training = optimizer is not None
     model.train(training)
@@ -173,8 +213,32 @@ def run_epoch(
             batch = batch.to(device)
             logit = model(batch)
             y = batch.y.reshape(-1).to(dtype=logit.dtype)
-            weight = None if pos_weight is None else pos_weight.to(device=device, dtype=logit.dtype)
-            loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=weight)
+            # weight = None if pos_weight is None else pos_weight.to(device=device, dtype=logit.dtype)
+            # loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=weight)
+            weight = None if pos_weight is None else pos_weight.to(
+                device=device,
+                dtype=logit.dtype,
+            )
+
+            if config.loss_function == "weighted_bce":
+                loss = F.binary_cross_entropy_with_logits(
+                    logit,
+                    y,
+                    pos_weight=weight,
+                )
+
+            elif config.loss_function == "focal":
+                loss = focal_loss(
+                    logit,
+                    y,
+                    gamma=config.focal_gamma,
+                    pos_weight=weight,
+                )
+
+            else:
+                raise ValueError(
+                    f"Unknown loss function: {config.loss_function}"
+                )
             if training:
                 optimizer.zero_grad()
                 loss.backward()
@@ -434,6 +498,7 @@ def train(
             optimizer=optimizer,
             threshold=config.threshold,
             pos_weight=pos_weight,
+            config=config,
         )
         val_metrics = run_epoch(
             model,
@@ -441,6 +506,8 @@ def train(
             device=device,
             optimizer=None,
             threshold=config.threshold,
+            pos_weight=pos_weight,
+            config=config,
         )
         result = EpochResult(epoch=epoch, train=train_metrics, val=val_metrics)
         history.append(result)
@@ -634,6 +701,7 @@ def _profile_loaders(
     device: torch.device,
     pos_weight: torch.Tensor | None,
     log: bool,
+    config: TrainConfig,
 ) -> list[dict[str, object]]:
     """One forward/backward pass per batch; records graph size, runtime, and peak memory."""
     was_training = model.training
@@ -652,7 +720,24 @@ def _profile_loaders(
                 logit = model(batch)
                 y = batch.y.reshape(-1).to(dtype=logit.dtype)
                 weight = None if pos_weight is None else pos_weight.to(device=device, dtype=logit.dtype)
-                loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=weight)
+                # loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=weight)
+                if config.loss_function == "weighted_bce":
+                    loss = F.binary_cross_entropy_with_logits(
+                        logit,
+                        y,
+                        pos_weight=weight,
+                    )
+                elif config.loss_function == "focal":
+                    loss = focal_loss(
+                        logit,
+                        y,
+                        gamma=config.focal_gamma,
+                        pos_weight=weight,
+                    )
+                else:
+                    raise ValueError(
+                        f"Unknown loss function: {config.loss_function}"
+                    )
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
                 forward_ms = (time.perf_counter() - started) * 1000.0
@@ -851,3 +936,5 @@ def predict(
         "output_dir": out,
         "run": saved,
     }
+
+

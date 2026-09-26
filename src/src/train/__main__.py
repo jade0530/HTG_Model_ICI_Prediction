@@ -70,6 +70,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Minimum validation-AUPRC improvement required to reset patience",
     )
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+    "--loss-function",
+    choices=("weighted_bce", "focal"),
+    default="weighted_bce",
+    help="Training loss: weighted_bce or focal",
+    )
+
+    parser.add_argument(
+        "--focal-gamma",
+        type=float,
+        default=2.0,
+        help="Gamma parameter for focal loss",
+    )
+
     parser.add_argument("--val-fraction", type=float, default=0.25)
     parser.add_argument("--test-fraction", type=float, default=0.0)
     parser.add_argument("--n-hvg", type=int, default=500)
@@ -154,6 +168,8 @@ def main_train(argv: list[str] | None = None) -> None:
             patience=args.patience,
             min_delta=args.min_delta,
             lr=args.lr,
+            loss_function=args.loss_function,
+            focal_gamma=args.focal_gamma,
             val_fraction=args.val_fraction,
             test_fraction=args.test_fraction,
             n_hvg=args.n_hvg,
