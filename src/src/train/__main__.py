@@ -36,6 +36,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num-gnn-layers", type=int, default=2)
     parser.add_argument("--gat-heads", type=int, default=4)
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument(
+        "--dropedge",
+        type=float,
+        default=0.0,
+        help="DropEdge probability applied during training only",
+    )
     parser.add_argument("--gene-strategy", choices=("hvg", "expressed"), default="hvg")
     parser.add_argument(
         "--sampling-mode",
@@ -158,6 +164,7 @@ def main_train(argv: list[str] | None = None) -> None:
             num_gnn_layers=args.num_gnn_layers,
             gat_heads=args.gat_heads,
             dropout=args.dropout,
+            dropedge=args.dropedge,
             gene_strategy=args.gene_strategy,
             sampling_mode=args.sampling_mode,
             cell_type_level=args.cell_type_level,

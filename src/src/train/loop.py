@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 from torch_geometric.loader import DataLoader
+from torch_geometric.utils import dropout_edge
 
 from src.data.data_loader import DEFAULT_N_HVG, SampleData, select_train_hvgs
 from src.data.sampler import CellSampler
@@ -48,6 +49,7 @@ class TrainConfig:
     num_gnn_layers: int = 2
     gat_heads: int = 4
     dropout: float = 0.1
+    dropedge: float = 0.0
     gene_strategy: GeneStrategy = "hvg"
     sampling_mode: SamplingMode = "random"
     cell_type_level: CellTypeLevel = "fine"
@@ -240,6 +242,14 @@ def run_epoch(
     for batch in loader:
         try:
             batch = batch.to(device)
+
+            if training and config.dropedge > 0:
+                batch.edge_index, _ = dropout_edge(
+                    batch.edge_index,
+                    p=config.dropedge,
+                    training=True,
+                )
+
             logit = model(batch)
             y = batch.y.reshape(-1).to(dtype=logit.dtype)
             # weight = None if pos_weight is None else pos_weight.to(device=device, dtype=logit.dtype)
