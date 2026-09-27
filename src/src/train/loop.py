@@ -244,11 +244,20 @@ def run_epoch(
             batch = batch.to(device)
 
             if training and config.dropedge > 0:
-                batch.edge_index, _ = dropout_edge(
-                    batch.edge_index,
+                edge_index = batch["cell", "expresses", "gene"].edge_index
+                edge_weight = batch["cell", "expresses", "gene"].edge_weight
+
+                keep_edge_index, mask = dropout_edge(
+                    edge_index,
                     p=config.dropedge,
                     training=True,
                 )
+
+                batch["cell", "expresses", "gene"].edge_index = keep_edge_index
+                batch["cell", "expresses", "gene"].edge_weight = edge_weight[mask]
+
+                batch["gene", "expressed_by", "cell"].edge_index = keep_edge_index.flip(0)
+                batch["gene", "expressed_by", "cell"].edge_weight = edge_weight[mask].clone()
 
             logit = model(batch)
             y = batch.y.reshape(-1).to(dtype=logit.dtype)
