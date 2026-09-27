@@ -267,8 +267,8 @@ def run_epoch(
                 loss = class_balanced_bce_loss(
                     logit,
                     y,
-                    n_pos=config.n_pos,
-                    n_neg=config.n_neg,
+                    n_pos=n_pos,
+                    n_neg=n_neg,
                     beta=config.class_balanced_beta,
                 )
 
@@ -516,6 +516,8 @@ def train(
             model=model,
             device=device,
             pos_weight=pos_weight,
+            n_pos=n_pos,
+            n_neg=n_neg,
             log=log,
         )
         if out is not None:
@@ -543,8 +545,8 @@ def train(
             optimizer=optimizer,
             threshold=config.threshold,
             pos_weight=pos_weight,
-            n_pos: int,
-            n_neg: int,
+            n_pos=n_pos,
+            n_neg=n_neg,
             config=config,
         )
         val_metrics = run_epoch(
@@ -554,8 +556,8 @@ def train(
             optimizer=None,
             threshold=config.threshold,
             pos_weight=pos_weight,
-            n_pos: int,
-            n_neg: int,
+            n_pos=n_pos,
+            n_neg=n_neg,
             config=config,
         )
         result = EpochResult(epoch=epoch, train=train_metrics, val=val_metrics)
@@ -749,6 +751,8 @@ def _profile_loaders(
     model: SampleGraphClassifier,
     device: torch.device,
     pos_weight: torch.Tensor | None,
+    n_pos: int,
+    n_neg: int,
     log: bool,
     config: TrainConfig,
 ) -> list[dict[str, object]]:
