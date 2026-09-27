@@ -72,9 +72,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument(
     "--loss-function",
-    choices=("weighted_bce", "focal"),
+    choices=("weighted_bce", "focal", "class_balanced"),
     default="weighted_bce",
-    help="Training loss: weighted_bce or focal",
+    help="Training loss: weighted_bce or focal or class_balanced",
     )
 
     parser.add_argument(

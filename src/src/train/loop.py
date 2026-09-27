@@ -68,6 +68,7 @@ class TrainConfig:
     use_pos_weight: bool = True
     loss_function: str = "weighted_bce"
     focal_gamma: float = 2.0
+    class_balanced_beta: float = 0.999
     seed: int = 0
     device: str = "auto"
     threshold: float = 0.5
@@ -193,6 +194,32 @@ def focal_loss(
 
     return (focal_weight * bce).mean()
 
+
+def class_balanced_bce_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    n_pos: int,
+    n_neg: int,
+    beta: float = 0.999,
+) -> torch.Tensor:
+    """Class-Balanced BCE using effective number of samples."""
+
+    pos_weight = (1.0 - beta) / (1.0 - beta ** n_pos)
+    neg_weight = (1.0 - beta) / (1.0 - beta ** n_neg)
+
+    weights = torch.where(
+        targets == 1,
+        torch.tensor(pos_weight, device=logits.device, dtype=logits.dtype),
+        torch.tensor(neg_weight, device=logits.device, dtype=logits.dtype),
+    )
+
+    return F.binary_cross_entropy_with_logits(
+        logits,
+        targets,
+        weight=weights,
+    )
+
 def run_epoch(
     model: SampleGraphClassifier,
     loader: DataLoader,
@@ -201,6 +228,8 @@ def run_epoch(
     optimizer: torch.optim.Optimizer | None = None,
     threshold: float = 0.5,
     pos_weight: torch.Tensor | None = None,
+    n_pos: int,
+    n_neg: int,
     config: TrainConfig,
 ) -> dict[str, float]:
     training = optimizer is not None
@@ -233,6 +262,14 @@ def run_epoch(
                     y,
                     gamma=config.focal_gamma,
                     pos_weight=weight,
+                )
+            elif config.loss_function == "class_balanced":
+                loss = class_balanced_bce_loss(
+                    logit,
+                    y,
+                    n_pos=config.n_pos,
+                    n_neg=config.n_neg,
+                    beta=config.class_balanced_beta,
                 )
 
             else:
@@ -329,6 +366,13 @@ def _loader(
 def _item_label(item: SampleData | SampleRecord) -> str:
     return str(item.label)
 
+
+def _class_counts(
+    train_items: Sequence[SampleData | SampleRecord],
+) -> tuple[int, int]:
+    n_pos = sum(1 for item in train_items if _item_label(item) == "R")
+    n_neg = len(train_items) - n_pos
+    return n_pos, n_neg
 
 def _pos_weight(train_items: Sequence[SampleData | SampleRecord], enabled: bool) -> torch.Tensor | None:
     if not enabled:
@@ -465,6 +509,7 @@ def train(
     model = build_classifier(len(gene_universe), config).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     pos_weight = _pos_weight(train_items, config.use_pos_weight)
+    n_pos, n_neg = _class_counts(train_items)
     if config.profile:
         profile_rows = _profile_loaders(
             {"train": train_loader, "val": val_loader},
@@ -498,6 +543,8 @@ def train(
             optimizer=optimizer,
             threshold=config.threshold,
             pos_weight=pos_weight,
+            n_pos: int,
+            n_neg: int,
             config=config,
         )
         val_metrics = run_epoch(
@@ -507,6 +554,8 @@ def train(
             optimizer=None,
             threshold=config.threshold,
             pos_weight=pos_weight,
+            n_pos: int,
+            n_neg: int,
             config=config,
         )
         result = EpochResult(epoch=epoch, train=train_metrics, val=val_metrics)
@@ -733,6 +782,14 @@ def _profile_loaders(
                         y,
                         gamma=config.focal_gamma,
                         pos_weight=weight,
+                    )
+                elif config.loss_function == "class_balanced":
+                    loss = class_balanced_bce_loss(
+                        logit,
+                        y,
+                        n_pos=n_pos,
+                        n_neg=n_neg,
+                        beta=config.class_balanced_beta,
                     )
                 else:
                     raise ValueError(
