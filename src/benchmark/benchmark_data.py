@@ -206,7 +206,7 @@ def add_data_args(parser) -> None:
     parser.add_argument("--val-ids", type=Path, default=None, help="Text file, one sample_id per line")
     parser.add_argument("--test-ids", type=Path, default=None, help="Optional text file, one sample_id per line")
     parser.add_argument("--gene-universe", type=Path, default=None, help="Optional HTG gene_universe.txt")
-    parser.add_argument("--n-hvg", type=int, default=500)
+    parser.add_argument("--n-hvg", type=int, default=3000)
     parser.add_argument("--tissue", default="Tumor")
     parser.add_argument("--ici-phase", default="pre")
     parser.add_argument("--seed", type=int, default=42)

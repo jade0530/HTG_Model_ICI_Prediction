@@ -536,13 +536,14 @@ def split_by_patient(
     val_fraction: float = 0.25,
     test_fraction: float = 0.0,
     seed: int = 0,
+    cancer_proportional: bool = False,
 ) -> tuple[list, list] | tuple[list, list, list]:
-    """Patient-disjoint split, then a light R/NR balance across folds.
+    """Patient-disjoint split, stratified by response and optionally cancer.
 
     Patients are grouped by ``dataset_id::patient_id``. Fold sizes still follow
     ``val_fraction`` / ``test_fraction``. Within those sizes, R and NR patients
-    are allocated in proportion to how often each class appears, so a seed
-    shuffle cannot dump every responder into one fold.
+    are allocated in proportion to how often each class appears. When
+    ``cancer_proportional`` is enabled, cancer type is included in the strata.
     """
     if not 0 < val_fraction < 1 or test_fraction < 0 or val_fraction + test_fraction >= 1:
         raise ValueError("val_fraction and test_fraction must split (0, 1)")
@@ -555,9 +556,14 @@ def split_by_patient(
     n_test = min(max(int(round(n_patients * test_fraction)), 0), n_patients - 2)
     n_val = min(max(int(round(n_patients * val_fraction)), 1), n_patients - n_test - 1)
 
-    by_label: dict[str, list[str]] = defaultdict(list)
+    by_label: dict[tuple[str, ...], list[str]] = defaultdict(list)
     for key in sorted(grouped):
-        by_label[_patient_response(grouped[key])].append(key)
+        rows = grouped[key]
+        stratum = (_patient_response(rows),)
+        if cancer_proportional:
+            cancer_type = str(getattr(rows[0], "cancer_type", "")).strip() or "UNKNOWN"
+            stratum = (cancer_type, *stratum)
+        by_label[stratum].append(key)
     rng = np.random.default_rng(seed)
     strata = sorted(by_label)
     shuffled: list[list[str]] = []

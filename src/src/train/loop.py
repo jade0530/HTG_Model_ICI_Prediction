@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import csv
 import json
+import random
 import time
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Mapping, Sequence
 
 import numpy as np
 import torch
+from torch import nn
 from torch.nn import functional as F
+from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
 from torch_geometric.loader import DataLoader
 
 from src.data.data_loader import DEFAULT_N_HVG, SampleData, select_train_hvgs
@@ -38,6 +41,8 @@ class TrainConfig:
 
     ``epochs`` is the maximum. Early stopping watches validation AUPRC with
     ``patience`` and ``min_delta`` unless ``early_stopping`` is False.
+    ``split_seed`` controls only patient allocation; ``training_seed`` controls
+    model initialization and all stochastic training operations.
     """
 
     hidden_dim: int = 64
@@ -58,17 +63,24 @@ class TrainConfig:
     patience: int = 5
     min_delta: float = 0.005
     lr: float = 1e-3
+    optimizer: Literal["adam", "adamw"] = "adam"
     val_fraction: float = 0.25
     test_fraction: float = 0.0
+    cancer_proportional_split: bool = False
     n_hvg: int = DEFAULT_N_HVG
     hvg_names: tuple[str, ...] = ()
     cache_samples: bool = True
     use_pos_weight: bool = True
-    seed: int = 0
+    split_seed: int = 0
+    training_seed: int = 0
     device: str = "auto"
     threshold: float = 0.5
     threshold_strategy: ThresholdStrategy = "max_f1"
     profile: bool = False
+    swa: bool = False
+    swa_start: int | None = None
+    swa_freq: int = 1
+    swa_lr: float | None = None
 
 
 @dataclass
@@ -91,6 +103,8 @@ class TrainResult:
     threshold: float = 0.5
     test: dict[str, float] | None = None
     output_dir: Path | None = None
+    swa_threshold: float | None = None
+    swa_n_averaged: int = 0
 
 
 @dataclass
@@ -119,6 +133,7 @@ def resolve_device(device: str) -> torch.device:
 
 
 def seed_everything(seed: int) -> None:
+    random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -152,6 +167,54 @@ def _fmt_auprc(value: float) -> str:
 def _checkpoint_score(metrics: dict[str, float]) -> float:
     """Best-checkpoint score is validation AUPRC. NaN does not rank."""
     return _finite_auprc(metrics)
+
+
+def model_has_batchnorm(model: nn.Module) -> bool:
+    """True only for BatchNorm*. LayerNorm and other norms are ignored."""
+    return any(isinstance(module, nn.modules.batchnorm._BatchNorm) for module in model.modules())
+
+
+def resolve_swa_start(epochs: int, swa_start: int | None) -> int:
+    """First epoch (0-based) that enters the SWA average. Default: last 25%."""
+    if swa_start is not None:
+        return max(0, int(swa_start))
+    return max(0, int(epochs) - max(1, int(epochs) // 4))
+
+
+def _maybe_update_swa_bn(swa_model: AveragedModel, loader: DataLoader, device: torch.device) -> bool:
+    if not model_has_batchnorm(swa_model.module):
+        return False
+
+    def batches():
+        for batch in loader:
+            yield batch.to(device)
+
+    update_bn(batches(), swa_model)
+    return True
+
+
+def _write_ablation_compare(
+    path: Path,
+    standard: Mapping[str, Mapping[str, float]],
+    swa: Mapping[str, Mapping[str, float]],
+) -> None:
+    keys = ("acc", "auroc", "auprc", "f1", "loss")
+    splits = [name for name in ("train", "val", "test") if name in standard or name in swa]
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["model", "split", *keys])
+        for model_name, metrics_by_split in (("best_standard", standard), ("swa", swa)):
+            for split in splits:
+                row = metrics_by_split.get(split, {})
+                writer.writerow(
+                    [model_name, split]
+                    + [
+                        ""
+                        if key not in row or row[key] != row[key]
+                        else f"{float(row[key]):.6f}"
+                        for key in keys
+                    ]
+                )
 
 
 def run_epoch(
@@ -215,6 +278,10 @@ def collect_predictions(
 
 
 def config_from_dict(payload: dict) -> TrainConfig:
+    payload = dict(payload)
+    if "seed" in payload:
+        payload.setdefault("split_seed", payload["seed"])
+        payload.setdefault("training_seed", payload["seed"])
     allowed = {item.name for item in dataclass_fields(TrainConfig)}
     values = {key: value for key, value in payload.items() if key in allowed}
     if "hvg_names" in values and values["hvg_names"] is not None:
@@ -254,7 +321,7 @@ def _loader(
         annotation_keys=annotation_keys_for(config.cell_type_level),
         cell_types=config.cell_types or None,
         training=training,
-        seed=config.seed,
+        seed=config.training_seed,
         n_hvg=config.n_hvg,
         hvg_names=config.hvg_names or None,
         cache_samples=config.cache_samples,
@@ -347,10 +414,12 @@ def train(
     does not improve by ``min_delta`` for ``patience`` epochs, or when
     ``epochs`` is reached. Pass ``early_stopping=False`` to run every epoch.
     The R/NR cutoff is chosen on val after the best checkpoint is reloaded;
-    epoch logs still use ``threshold``.
+    epoch logs still use ``threshold``. ``swa=True`` keeps a separate
+    ``AveragedModel`` from ``swa_start`` and evaluates it after training
+    without replacing the best-validation checkpoint.
     """
     config = config or TrainConfig()
-    seed_everything(config.seed)
+    seed_everything(config.training_seed)
     device = resolve_device(config.device)
     if log:
         gpu = torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu"
@@ -360,11 +429,15 @@ def train(
             items,
             val_fraction=config.val_fraction,
             test_fraction=config.test_fraction,
-            seed=config.seed,
+            seed=config.split_seed,
+            cancer_proportional=config.cancer_proportional_split,
         )
     else:
         train_items, val_items = split_by_patient(
-            items, val_fraction=config.val_fraction, seed=config.seed
+            items,
+            val_fraction=config.val_fraction,
+            seed=config.split_seed,
+            cancer_proportional=config.cancer_proportional_split,
         )
         test_items = []
 
@@ -391,7 +464,7 @@ def train(
         )
         (out / "gene_universe.txt").write_text("\n".join(gene_universe.names) + "\n")
 
-    sampler = CellSampler(num_cells=config.num_cells, seed=config.seed)
+    sampler = CellSampler(num_cells=config.num_cells, seed=config.training_seed)
     train_loader = _loader(
         train_items, sampler=sampler, gene_universe=gene_universe, config=config, training=True
     )
@@ -399,7 +472,19 @@ def train(
         val_items, sampler=sampler, gene_universe=gene_universe, config=config, training=False
     )
     model = build_classifier(len(gene_universe), config).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
+    if config.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=0.01)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=0.0)
+    swa_model: AveragedModel | None = None
+    swa_scheduler: SWALR | None = None
+    swa_start = resolve_swa_start(config.epochs, config.swa_start)
+    swa_lr = float(config.lr if config.swa_lr is None else config.swa_lr)
+    swa_freq = max(1, int(config.swa_freq))
+    if config.swa:
+        swa_model = AveragedModel(model, device=device)
+        if log:
+            print(f"swa=on swa_start={swa_start} swa_freq={swa_freq} swa_lr={swa_lr}")
     pos_weight = _pos_weight(train_items, config.use_pos_weight)
     if config.profile:
         profile_rows = _profile_loaders(
@@ -435,6 +520,14 @@ def train(
             threshold=config.threshold,
             pos_weight=pos_weight,
         )
+        if swa_model is not None and epoch >= swa_start and (epoch - swa_start) % swa_freq == 0:
+            swa_model.update_parameters(model)
+            if swa_scheduler is None:
+                # Construct after swa_start so Adam matches the no-SWA
+                # baseline until averaging begins. The constructor steps once.
+                swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=0)
+            else:
+                swa_scheduler.step()
         val_metrics = run_epoch(
             model,
             val_loader,
@@ -549,6 +642,39 @@ def train(
         if log:
             print(format_metrics("test", test_metrics))
 
+    def _split_eval_loss(split_items: Sequence[SampleData | SampleRecord]) -> float | None:
+        if not split_items:
+            return None
+        loader = _loader(
+            split_items, sampler=sampler, gene_universe=gene_universe, config=config, training=False
+        )
+        return run_epoch(
+            model,
+            loader,
+            device=device,
+            optimizer=None,
+            threshold=chosen_threshold,
+            pos_weight=pos_weight,
+        )["loss"]
+
+    def _metrics_with_loss(
+        predictions_by_split: Mapping[str, tuple[np.ndarray, np.ndarray]],
+        threshold: float,
+    ) -> dict[str, dict[str, float]]:
+        metrics_by_split = {
+            split: classification_metrics(y_true, y_prob, threshold=threshold)
+            for split, (y_true, y_prob) in predictions_by_split.items()
+        }
+        item_by_split = {"train": train_items, "val": val_items, "test": test_items}
+        for split, items in item_by_split.items():
+            if split not in metrics_by_split:
+                continue
+            split_loss = _split_eval_loss(items)
+            if split_loss is not None:
+                metrics_by_split[split]["loss"] = split_loss
+        return metrics_by_split
+
+    standard_split_metrics: dict[str, dict[str, float]] | None = None
     if out is not None:
         predictions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         if val_pred is not None:
@@ -575,6 +701,95 @@ def train(
             threshold=chosen_threshold,
             threshold_strategy=config.threshold_strategy,
         )
+        if config.swa:
+            standard_split_metrics = _metrics_with_loss(predictions, chosen_threshold)
+
+    swa_threshold = None
+    swa_n_averaged = 0
+    if swa_model is not None:
+        swa_n_averaged = int(swa_model.n_averaged.item())
+        if swa_n_averaged == 0:
+            if log:
+                print("SWA collected no snapshots; skipping SWA evaluation.")
+        else:
+            bn_updated = _maybe_update_swa_bn(swa_model, train_loader, device)
+            if log:
+                print(
+                    f"Evaluating SWA checkpoint n_averaged={swa_n_averaged} "
+                    f"bn_updated={bn_updated}"
+                )
+            swa_state = {
+                key: value.detach().cpu().clone()
+                for key, value in swa_model.module.state_dict().items()
+            }
+            model.load_state_dict(swa_state)
+            swa_val_pred = _split_predictions(val_items)
+            if swa_val_pred is not None:
+                swa_threshold = select_threshold(
+                    swa_val_pred[0],
+                    swa_val_pred[1],
+                    strategy=config.threshold_strategy,
+                    fixed=config.threshold,
+                )
+            else:
+                swa_threshold = float(config.threshold)
+            if log:
+                print(f"swa_threshold={swa_threshold:.4f} strategy={config.threshold_strategy}")
+            swa_predictions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+            if swa_val_pred is not None:
+                swa_predictions["val"] = swa_val_pred
+            swa_train_pred = _split_predictions(train_items)
+            if swa_train_pred is not None:
+                swa_predictions["train"] = swa_train_pred
+            swa_test_pred = _split_predictions(test_items)
+            if swa_test_pred is not None:
+                swa_predictions["test"] = swa_test_pred
+                if log:
+                    print(
+                        format_metrics(
+                            "swa_test",
+                            classification_metrics(
+                                swa_test_pred[0], swa_test_pred[1], threshold=swa_threshold
+                            ),
+                        )
+                    )
+            swa_split_metrics = _metrics_with_loss(swa_predictions, swa_threshold)
+            if out is not None:
+                swa_dir = out / "swa"
+                _save_checkpoint(
+                    out / "swa.pt",
+                    model=model,
+                    config=config,
+                    gene_universe=gene_universe,
+                    epoch=stop_epoch,
+                    metrics=swa_split_metrics.get("val", {}),
+                    threshold=swa_threshold,
+                )
+                _write_json(
+                    out / "swa.json",
+                    {
+                        "swa_start": swa_start,
+                        "swa_freq": swa_freq,
+                        "swa_lr": swa_lr,
+                        "n_averaged": swa_n_averaged,
+                        "bn_updated": bn_updated,
+                        "threshold": swa_threshold,
+                        "threshold_strategy": config.threshold_strategy,
+                    },
+                )
+                write_run_report(
+                    swa_dir,
+                    history=history,
+                    predictions=swa_predictions,
+                    threshold=swa_threshold,
+                    threshold_strategy=config.threshold_strategy,
+                )
+                if standard_split_metrics is not None:
+                    _write_ablation_compare(
+                        out / "ablation_compare.csv", standard_split_metrics, swa_split_metrics
+                    )
+            model.load_state_dict(best_state)
+
     return TrainResult(
         history=history,
         model=model,
@@ -587,6 +802,8 @@ def train(
         threshold=chosen_threshold,
         test=test_metrics,
         output_dir=out,
+        swa_threshold=swa_threshold,
+        swa_n_averaged=swa_n_averaged,
     )
 
 
@@ -795,7 +1012,7 @@ def predict(
     saved.model.to(resolved)
     loader = _loader(
         items,
-        sampler=CellSampler(num_cells=config.num_cells, seed=config.seed),
+        sampler=CellSampler(num_cells=config.num_cells, seed=config.training_seed),
         gene_universe=saved.gene_universe,
         config=config,
         training=False,

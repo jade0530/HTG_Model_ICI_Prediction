@@ -1,21 +1,31 @@
 """Stage-1 parameter-sweep experiments.
 
 Experiment 1 compares hidden_dim 32 vs 64 on each baseline sampling mode
-(whole_sample, random, proportional). Every run uses 40 epochs, seed 42,
+(whole_sample, random, proportional). Every run uses 40 epochs, split seed 42,
+training seed 42,
 and --no-early-stopping. All other knobs stay at the ``python -m src.train``
 CLI defaults.
 
 Experiment 2 trains for 100 epochs to inspect overfitting curves. It uses the
-CLI default hidden_dim (64), 128 sampled cells, seed 42, and
+CLI default hidden_dim (64), 128 sampled cells, split/training seed 42, and
 --no-early-stopping on whole_sample, random, and proportional.
 
 Experiment 3 checks dropout 0 vs 0.3. It uses the CLI default hidden_dim (64),
-128 sampled cells, seed 42, and --no-early-stopping on whole_sample, random,
+128 sampled cells, split/training seed 42, and --no-early-stopping on whole_sample, random,
 and proportional.
 
 Experiment 4 compares mean vs attention pooling on whole_sample, random, and
-proportional. Every run uses 40 epochs, seed 42, and --no-early-stopping.
+proportional. Every run uses 40 epochs, split/training seed 42, and
+--no-early-stopping.
 Random and proportional use 128 sampled cells; whole_sample keeps all cells.
+
+Experiment 5 compares the current training baseline against the same setup
+plus Stochastic Weight Averaging. Architecture, sampling, splits, HVGs,
+loss, and optimizer knobs stay fixed. The SWA run still writes the usual
+best-validation checkpoint and a separate final SWA checkpoint.
+
+Experiment 6 compares Adam against AdamW under the Experiment 5 baseline
+setup. Only the optimizer changes.
 
 Check the job matrix (no training):
 
@@ -27,6 +37,8 @@ Launch a sweep:
     python tests/test_run_parameters.py --experiment 2
     python tests/test_run_parameters.py --experiment 3
     python tests/test_run_parameters.py --experiment 4
+    python tests/test_run_parameters.py --experiment 5
+    python tests/test_run_parameters.py --experiment 6
     python tests/test_run_parameters.py --experiment 4 --dataset-root /path/to/h5ads --output-root /path/to/results
 """
 
@@ -73,6 +85,16 @@ EXPERIMENT_4_NUM_CELLS = 128
 EXPERIMENT_4_SEED = EXPERIMENT_SEED
 EXPERIMENT_4_OUTPUT_ROOT = REPO_ROOT / "outputs" / "experiments" / "exp4"
 
+EXPERIMENT_5_HIDDEN_DIM = 128
+EXPERIMENT_5_NUM_CELLS = 128
+EXPERIMENT_5_N_HVG = 5000
+EXPERIMENT_5_EPOCHS = 60
+EXPERIMENT_5_SEED = EXPERIMENT_SEED
+EXPERIMENT_5_OUTPUT_ROOT = REPO_ROOT / "outputs" / "experiments" / "exp5_swa"
+
+EXPERIMENT_6_OPTIMIZERS = ("adam", "adamw")
+EXPERIMENT_6_OUTPUT_ROOT = REPO_ROOT / "outputs" / "experiments" / "exp6_optimizer"
+
 
 def experiment_1_jobs(
     *,
@@ -92,7 +114,9 @@ def experiment_1_jobs(
                 sampling_mode,
                 "--epochs",
                 str(EXPERIMENT_1_EPOCHS),
-                "--seed",
+                "--split-seed",
+                str(EXPERIMENT_1_SEED),
+                "--training-seed",
                 str(EXPERIMENT_1_SEED),
                 "--no-early-stopping",
                 "--output-dir",
@@ -121,7 +145,9 @@ def experiment_2_jobs(
             str(EXPERIMENT_2_NUM_CELLS),
             "--epochs",
             str(EXPERIMENT_2_EPOCHS),
-            "--seed",
+            "--split-seed",
+            str(EXPERIMENT_2_SEED),
+            "--training-seed",
             str(EXPERIMENT_2_SEED),
             "--no-early-stopping",
             "--output-dir",
@@ -152,7 +178,9 @@ def experiment_3_jobs(
                 str(dropout),
                 "--num-cells",
                 str(EXPERIMENT_3_NUM_CELLS),
-                "--seed",
+                "--split-seed",
+                str(EXPERIMENT_3_SEED),
+                "--training-seed",
                 str(EXPERIMENT_3_SEED),
                 "--no-early-stopping",
                 "--output-dir",
@@ -182,7 +210,9 @@ def experiment_4_jobs(
                 pooling,
                 "--epochs",
                 str(EXPERIMENT_4_EPOCHS),
-                "--seed",
+                "--split-seed",
+                str(EXPERIMENT_4_SEED),
+                "--training-seed",
                 str(EXPERIMENT_4_SEED),
                 "--no-early-stopping",
                 "--output-dir",
@@ -193,6 +223,127 @@ def experiment_4_jobs(
             if dataset_root is not None:
                 argv.extend(["--dataset-root", str(dataset_root)])
             jobs.append((name, argv))
+    return jobs
+
+
+def experiment_5_jobs(
+    *,
+    dataset_root: str | Path | None = None,
+    output_root: str | Path | None = None,
+) -> list[tuple[str, list[str]]]:
+    """Return ``(run_name, argv)`` pairs for Experiment 5 (baseline vs SWA)."""
+    root = Path(output_root) if output_root is not None else EXPERIMENT_5_OUTPUT_ROOT
+    jobs: list[tuple[str, list[str]]] = []
+    shared = [
+        "--encoder",
+        "sage",
+        "--pooling",
+        "mean",
+        "--readout",
+        "cell",
+        "--num-gnn-layers",
+        "2",
+        "--gat-heads",
+        "4",
+        "--hidden-dim",
+        str(EXPERIMENT_5_HIDDEN_DIM),
+        "--dropout",
+        "0.1",
+        "--gene-strategy",
+        "hvg",
+        "--n-hvg",
+        str(EXPERIMENT_5_N_HVG),
+        "--sampling-mode",
+        "random",
+        "--num-cells",
+        str(EXPERIMENT_5_NUM_CELLS),
+        "--batch-size",
+        "2",
+        "--epochs",
+        str(EXPERIMENT_5_EPOCHS),
+        "--lr",
+        "0.001",
+        "--val-fraction",
+        "0.25",
+        "--test-fraction",
+        "0.0",
+        "--no-early-stopping",
+        "--threshold-strategy",
+        "max_f1",
+        "--threshold",
+        "0.5",
+        "--split-seed",
+        str(EXPERIMENT_5_SEED),
+        "--training-seed",
+        str(EXPERIMENT_5_SEED),
+    ]
+    if dataset_root is not None:
+        shared.extend(["--dataset-root", str(dataset_root)])
+    for name, extra in (("baseline", []), ("swa", ["--swa"])):
+        jobs.append((name, [*shared, *extra, "--output-dir", str(root / name)]))
+    return jobs
+
+
+def experiment_6_jobs(
+    *,
+    dataset_root: str | Path | None = None,
+    output_root: str | Path | None = None,
+) -> list[tuple[str, list[str]]]:
+    """Return ``(run_name, argv)`` pairs for Experiment 6 (Adam vs AdamW)."""
+    root = Path(output_root) if output_root is not None else EXPERIMENT_6_OUTPUT_ROOT
+    jobs: list[tuple[str, list[str]]] = []
+    for optimizer in EXPERIMENT_6_OPTIMIZERS:
+        name = optimizer
+        argv = [
+            "--encoder",
+            "sage",
+            "--pooling",
+            "mean",
+            "--readout",
+            "cell",
+            "--num-gnn-layers",
+            "2",
+            "--gat-heads",
+            "4",
+            "--hidden-dim",
+            str(EXPERIMENT_5_HIDDEN_DIM),
+            "--dropout",
+            "0.1",
+            "--gene-strategy",
+            "hvg",
+            "--n-hvg",
+            str(EXPERIMENT_5_N_HVG),
+            "--sampling-mode",
+            "random",
+            "--num-cells",
+            str(EXPERIMENT_5_NUM_CELLS),
+            "--batch-size",
+            "2",
+            "--epochs",
+            str(EXPERIMENT_5_EPOCHS),
+            "--lr",
+            "0.001",
+            "--optimizer",
+            optimizer,
+            "--val-fraction",
+            "0.25",
+            "--test-fraction",
+            "0.0",
+            "--no-early-stopping",
+            "--threshold-strategy",
+            "max_f1",
+            "--threshold",
+            "0.5",
+            "--split-seed",
+            str(EXPERIMENT_5_SEED),
+            "--training-seed",
+            str(EXPERIMENT_5_SEED),
+            "--output-dir",
+            str(root / name),
+        ]
+        if dataset_root is not None:
+            argv.extend(["--dataset-root", str(dataset_root)])
+        jobs.append((name, argv))
     return jobs
 
 
@@ -242,6 +393,24 @@ def run_experiment_4(
     return _run_jobs("4", experiment_4_jobs(dataset_root=dataset_root, output_root=output_root))
 
 
+def run_experiment_5(
+    *,
+    dataset_root: str | Path | None = None,
+    output_root: str | Path | None = None,
+) -> list[str]:
+    """Train Experiment 5 (baseline vs SWA). Returns output directories."""
+    return _run_jobs("5", experiment_5_jobs(dataset_root=dataset_root, output_root=output_root))
+
+
+def run_experiment_6(
+    *,
+    dataset_root: str | Path | None = None,
+    output_root: str | Path | None = None,
+) -> list[str]:
+    """Train Experiment 6 (Adam vs AdamW). Returns output directories."""
+    return _run_jobs("6", experiment_6_jobs(dataset_root=dataset_root, output_root=output_root))
+
+
 @pytest.mark.parametrize("hidden_dim", EXPERIMENT_1_HIDDEN_DIMS)
 @pytest.mark.parametrize("sampling_mode", EXPERIMENT_1_SAMPLING_MODES)
 def test_experiment_1_uses_requested_knobs_and_cli_defaults(hidden_dim: int, sampling_mode: str) -> None:
@@ -265,7 +434,8 @@ def test_experiment_1_uses_requested_knobs_and_cli_defaults(hidden_dim: int, sam
     assert args.val_fraction == 0.25
     assert args.test_fraction == 0.0
     assert args.lr == 1e-3
-    assert args.seed == EXPERIMENT_1_SEED
+    assert args.split_seed == EXPERIMENT_1_SEED
+    assert args.training_seed == EXPERIMENT_1_SEED
     assert args.device == "auto"
     assert args.tissue == "Tumor"
     assert args.ici_phase == "pre"
@@ -305,7 +475,8 @@ def test_experiment_2_uses_requested_knobs_and_cli_defaults(sampling_mode: str) 
     assert args.val_fraction == 0.25
     assert args.test_fraction == 0.0
     assert args.lr == 1e-3
-    assert args.seed == EXPERIMENT_2_SEED
+    assert args.split_seed == EXPERIMENT_2_SEED
+    assert args.training_seed == EXPERIMENT_2_SEED
     assert args.device == "auto"
     assert args.tissue == "Tumor"
     assert args.ici_phase == "pre"
@@ -345,7 +516,8 @@ def test_experiment_3_uses_requested_knobs_and_cli_defaults(
     assert args.val_fraction == 0.25
     assert args.test_fraction == 0.0
     assert args.lr == 1e-3
-    assert args.seed == EXPERIMENT_3_SEED
+    assert args.split_seed == EXPERIMENT_3_SEED
+    assert args.training_seed == EXPERIMENT_3_SEED
     assert args.device == "auto"
     assert args.tissue == "Tumor"
     assert args.ici_phase == "pre"
@@ -391,7 +563,8 @@ def test_experiment_4_uses_requested_knobs_and_cli_defaults(
     assert args.val_fraction == 0.25
     assert args.test_fraction == 0.0
     assert args.lr == 1e-3
-    assert args.seed == EXPERIMENT_4_SEED
+    assert args.split_seed == EXPERIMENT_4_SEED
+    assert args.training_seed == EXPERIMENT_4_SEED
     assert args.device == "auto"
     assert args.tissue == "Tumor"
     assert args.ici_phase == "pre"
@@ -409,12 +582,82 @@ def test_experiment_4_has_six_runs() -> None:
     ]
 
 
+@pytest.mark.parametrize("name,swa", [("baseline", False), ("swa", True)])
+def test_experiment_5_matches_requested_training_command(name: str, swa: bool) -> None:
+    jobs = dict(experiment_5_jobs())
+    assert name in jobs
+    args = parse_args(jobs[name])
+    assert args.swa is swa
+    assert args.encoder == "sage"
+    assert args.pooling == "mean"
+    assert args.readout == "cell"
+    assert args.num_gnn_layers == 2
+    assert args.gat_heads == 4
+    assert args.hidden_dim == EXPERIMENT_5_HIDDEN_DIM
+    assert args.dropout == 0.1
+    assert args.gene_strategy == "hvg"
+    assert args.n_hvg == EXPERIMENT_5_N_HVG
+    assert args.sampling_mode == "random"
+    assert args.num_cells == EXPERIMENT_5_NUM_CELLS
+    assert args.batch_size == 2
+    assert args.epochs == EXPERIMENT_5_EPOCHS
+    assert args.lr == 1e-3
+    assert args.val_fraction == 0.25
+    assert args.test_fraction == 0.0
+    assert args.no_early_stopping is True
+    assert args.threshold_strategy == "max_f1"
+    assert args.threshold == 0.5
+    assert args.split_seed == EXPERIMENT_5_SEED
+    assert args.training_seed == EXPERIMENT_5_SEED
+    assert args.swa_start is None
+    assert args.swa_freq == 1
+    assert args.swa_lr is None
+
+
+def test_experiment_5_has_baseline_and_swa() -> None:
+    names = [name for name, _ in experiment_5_jobs()]
+    assert names == ["baseline", "swa"]
+
+
+@pytest.mark.parametrize("optimizer", EXPERIMENT_6_OPTIMIZERS)
+def test_experiment_6_changes_only_optimizer(optimizer: str) -> None:
+    jobs = dict(experiment_6_jobs())
+    args = parse_args(jobs[optimizer])
+    assert args.optimizer == optimizer
+    assert args.swa is False
+    assert args.encoder == "sage"
+    assert args.pooling == "mean"
+    assert args.readout == "cell"
+    assert args.num_gnn_layers == 2
+    assert args.gat_heads == 4
+    assert args.hidden_dim == EXPERIMENT_5_HIDDEN_DIM
+    assert args.dropout == 0.1
+    assert args.gene_strategy == "hvg"
+    assert args.n_hvg == EXPERIMENT_5_N_HVG
+    assert args.sampling_mode == "random"
+    assert args.num_cells == EXPERIMENT_5_NUM_CELLS
+    assert args.batch_size == 2
+    assert args.epochs == EXPERIMENT_5_EPOCHS
+    assert args.lr == 1e-3
+    assert args.val_fraction == 0.25
+    assert args.test_fraction == 0.0
+    assert args.no_early_stopping is True
+    assert args.threshold_strategy == "max_f1"
+    assert args.threshold == 0.5
+    assert args.split_seed == EXPERIMENT_5_SEED
+    assert args.training_seed == EXPERIMENT_5_SEED
+
+
+def test_experiment_6_has_adam_and_adamw() -> None:
+    assert [name for name, _ in experiment_6_jobs()] == ["adam", "adamw"]
+
+
 def _parse_runner_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Stage-1 parameter-sweep experiments")
     parser.add_argument(
         "--experiment",
         default="1",
-        choices=("1", "2", "3", "4"),
+        choices=("1", "2", "3", "4", "5", "6"),
         help="Which experiment to launch",
     )
     parser.add_argument(
@@ -442,3 +685,7 @@ if __name__ == "__main__":
         run_experiment_3(dataset_root=args.dataset_root, output_root=args.output_root)
     elif args.experiment == "4":
         run_experiment_4(dataset_root=args.dataset_root, output_root=args.output_root)
+    elif args.experiment == "5":
+        run_experiment_5(dataset_root=args.dataset_root, output_root=args.output_root)
+    elif args.experiment == "6":
+        run_experiment_6(dataset_root=args.dataset_root, output_root=args.output_root)

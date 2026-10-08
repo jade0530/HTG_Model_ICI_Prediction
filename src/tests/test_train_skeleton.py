@@ -121,17 +121,24 @@ def test_split_keeps_mixed_label_patient_together():
     assert {item.sample_id for item in mix_fold if item.patient_id == "Pmix"} == {"A1", "A2"}
 
 
-def _record(dataset_id: str, patient_id: str, sample_id: str) -> SampleRecord:
+def _record(
+    dataset_id: str,
+    patient_id: str,
+    sample_id: str,
+    *,
+    cancer_type: str = "BCC",
+    label: str = "R",
+) -> SampleRecord:
     return SampleRecord(
         h5ad_path=Path("missing.h5ad"),
         metadata_path=None,
         patient_id=patient_id,
         sample_id=sample_id,
         dataset_id=dataset_id,
-        label="R",
+        label=label,
         tissue="Tumor",
         ici_phase="pre",
-        cancer_type="BCC",
+        cancer_type=cancer_type,
         output_file=f"sample_h5ad/Tumor/pre/{sample_id}.h5ad",
     )
 
@@ -162,6 +169,35 @@ def test_same_patient_id_in_different_datasets_is_not_merged():
     assert_patient_disjoint(train, val)
     keys = {patient_key(item) for item in train + val}
     assert keys == {"StudyA::P1", "StudyB::P1", "StudyA::P2", "StudyB::P3"}
+
+
+def test_cancer_proportional_split_stratifies_cancer_types():
+    records = [
+        _record(
+            "Study",
+            f"{cancer}_{label}_{index}",
+            f"{cancer}_{label}_{index}",
+            cancer_type=cancer,
+            label=label,
+        )
+        for cancer in ("BCC", "CRC", "MCC")
+        for label in ("R", "NR")
+        for index in range(4)
+    ]
+    train, val, test = split_by_patient(
+        records,
+        val_fraction=0.25,
+        test_fraction=0.25,
+        seed=42,
+        cancer_proportional=True,
+    )
+    assert_patient_disjoint(train, val, test)
+    for fold, expected_per_cancer in ((train, 4), (val, 2), (test, 2)):
+        assert {cancer: sum(row.cancer_type == cancer for row in fold) for cancer in ("BCC", "CRC", "MCC")} == {
+            "BCC": expected_per_cancer,
+            "CRC": expected_per_cancer,
+            "MCC": expected_per_cancer,
+        }
 
 
 def test_load_sample_manifest_filters_tumor_pre(tmp_path):
@@ -438,7 +474,8 @@ def test_fit_runs_with_by_cell_type_sampling():
             batch_size=2,
             epochs=1,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
         ),
         log=False,
     )
@@ -464,7 +501,8 @@ def test_train_writes_checkpoints_and_history(tmp_path):
             batch_size=2,
             epochs=2,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
         ),
         output_dir=tmp_path,
         log=False,
@@ -513,7 +551,8 @@ def test_train_builds_universe_and_hvgs_from_training_fold_only():
             epochs=1,
             val_fraction=0.5,
             n_hvg=3,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
         ),
         log=False,
     )
@@ -536,11 +575,19 @@ def test_cli_parse_defaults():
     assert args.encoder == "sage"
     assert args.threshold_strategy == "max_f1"
     assert args.test_fraction == 0.0
+    assert args.cancer_proportional_split is False
+    assert args.optimizer == "adam"
+    assert args.split_seed == 0
+    assert args.training_seed == 0
     assert args.profile is False
     assert args.epochs == 30
     assert args.patience == 5
     assert args.min_delta == 0.005
     assert args.no_early_stopping is False
+    assert args.swa is False
+    assert args.swa_start is None
+    assert args.swa_freq == 1
+    assert args.swa_lr is None
 
 
 def test_cli_accepts_whole_sample_and_profile():
@@ -550,6 +597,29 @@ def test_cli_accepts_whole_sample_and_profile():
     assert args.sampling_mode == "whole_sample"
     assert args.profile is True
     assert args.no_early_stopping is True
+
+
+def test_cli_accepts_cancer_proportional_split():
+    from src.train.__main__ import parse_args
+
+    assert parse_args(["--cancer-proportional-split"]).cancer_proportional_split is True
+    assert parse_args(["-cancer-proportional-split"]).cancer_proportional_split is True
+
+
+def test_cli_accepts_independent_split_and_training_seeds():
+    from src.train.__main__ import parse_args
+
+    args = parse_args(["--split-seed", "11", "--training-seed", "22"])
+    assert args.split_seed == 11
+    assert args.training_seed == 22
+
+
+def test_old_checkpoint_seed_maps_to_both_new_seeds():
+    from src.train.loop import config_from_dict
+
+    config = config_from_dict({"seed": 42})
+    assert config.split_seed == 42
+    assert config.training_seed == 42
 
 
 def test_attention_pool_normalises_per_graph():
@@ -686,7 +756,8 @@ def test_fit_runs_with_sage_encoder():
             batch_size=2,
             epochs=1,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
         ),
         log=False,
     )
@@ -733,7 +804,8 @@ def test_fit_runs_one_epoch_and_reports_metrics():
             batch_size=2,
             epochs=1,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
         ),
         log=False,
     )
@@ -811,7 +883,8 @@ def test_fit_and_train_hvgs_with_whole_sample(tmp_path):
             batch_size=2,
             epochs=1,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
             profile=True,
         ),
         log=False,
@@ -829,7 +902,8 @@ def test_fit_and_train_hvgs_with_whole_sample(tmp_path):
             epochs=1,
             val_fraction=0.5,
             n_hvg=3,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
             profile=True,
             device="cpu",
         ),
@@ -908,7 +982,8 @@ def test_early_stopping_patience_and_best_checkpoint_reload(tmp_path, monkeypatc
             patience=5,
             min_delta=0.005,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
             device="cpu",
             hvg_names=("G1", "G2", "G3"),
         ),
@@ -970,7 +1045,8 @@ def test_early_stopping_nan_auprc_is_not_improvement(monkeypatch):
             patience=5,
             min_delta=0.005,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
             device="cpu",
             hvg_names=("G1", "G2", "G3"),
         ),
@@ -1006,7 +1082,8 @@ def test_reaches_max_epochs_without_early_stopping(monkeypatch):
             patience=5,
             min_delta=0.005,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
             device="cpu",
             hvg_names=("G1", "G2", "G3"),
         ),
@@ -1044,7 +1121,8 @@ def test_no_early_stopping_flag_runs_all_epochs(monkeypatch):
             patience=5,
             min_delta=0.005,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
             device="cpu",
             hvg_names=("G1", "G2", "G3"),
         ),
@@ -1058,7 +1136,82 @@ def test_no_early_stopping_flag_runs_all_epochs(monkeypatch):
     assert [row.val["auprc"] for row in result.history] == values
 
 
-def test_no_early_stopping_flag_runs_all_epochs(monkeypatch):
+def test_resolve_swa_start_defaults_to_last_quarter() -> None:
+    from src.train.loop import resolve_swa_start
+
+    assert resolve_swa_start(60, None) == 45
+    assert resolve_swa_start(60, 10) == 10
+    assert resolve_swa_start(4, None) == 3
+
+
+def test_htg_classifier_has_no_batchnorm() -> None:
+    pytest.importorskip("torch")
+    from src.train.loop import model_has_batchnorm
+    from src.train.model import SampleGraphClassifier
+
+    model = SampleGraphClassifier(4, hidden_dim=8, encoder="sage", pooling="mean")
+    assert model_has_batchnorm(model) is False
+
+
+def test_swa_writes_separate_checkpoint_and_keeps_best(tmp_path) -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    import json
+
+    import torch
+
+    from src.train.loop import load_checkpoint, predict, train
+
+    samples = [
+        _toy_sample("S1", "P1", "R", 1),
+        _toy_sample("S2", "P2", "R", 2),
+        _toy_sample("S3", "P3", "NR", 3),
+        _toy_sample("S4", "P4", "NR", 4),
+    ]
+    result = train(
+        samples,
+        gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
+        config=TrainConfig(
+            hidden_dim=8,
+            num_cells=4,
+            batch_size=2,
+            epochs=4,
+            early_stopping=False,
+            val_fraction=0.5,
+            split_seed=0,
+            training_seed=0,
+            device="cpu",
+            hvg_names=("G1", "G2", "G3"),
+            swa=True,
+            swa_start=2,
+        ),
+        output_dir=tmp_path,
+        log=False,
+    )
+    assert result.swa_n_averaged >= 1
+    assert result.swa_threshold is not None
+    assert (tmp_path / "best.pt").is_file()
+    assert (tmp_path / "swa.pt").is_file()
+    assert (tmp_path / "swa.json").is_file()
+    assert (tmp_path / "ablation_compare.csv").is_file()
+    assert (tmp_path / "swa" / "results.csv").is_file()
+    assert (tmp_path / "results.csv").is_file()
+    swa_meta = json.loads((tmp_path / "swa.json").read_text())
+    assert swa_meta["n_averaged"] == result.swa_n_averaged
+    assert swa_meta["bn_updated"] is False
+    assert swa_meta["swa_start"] == 2
+
+    best = torch.load(tmp_path / "best.pt", map_location="cpu", weights_only=False)
+    swa = torch.load(tmp_path / "swa.pt", map_location="cpu", weights_only=False)
+    assert best["epoch"] == result.best_epoch
+    assert "threshold" in swa
+    saved = load_checkpoint(tmp_path / "swa.pt", device="cpu")
+    scored = predict(samples, saved, output_dir=tmp_path / "swa_infer", log=False)
+    assert (tmp_path / "swa_infer" / "predictions.csv").is_file()
+    assert len(scored["rows"]) == 4
+
+
+def test_swa_off_does_not_write_swa_checkpoint(tmp_path) -> None:
     pytest.importorskip("torch")
     pytest.importorskip("torch_geometric")
     from src.train.loop import train
@@ -1069,8 +1222,6 @@ def test_no_early_stopping_flag_runs_all_epochs(monkeypatch):
         _toy_sample("S3", "P3", "NR", 3),
         _toy_sample("S4", "P4", "NR", 4),
     ]
-    values = [0.20, 0.50, 0.501, 0.502, 0.503, 0.504, 0.504]
-    _scripted_val_auprc(monkeypatch, values)
     result = train(
         samples,
         gene_universe=GeneUniverse(["G1", "G2", "G3", "G4"]),
@@ -1078,22 +1229,31 @@ def test_no_early_stopping_flag_runs_all_epochs(monkeypatch):
             hidden_dim=8,
             num_cells=4,
             batch_size=2,
-            epochs=7,
-            early_stopping=False,
-            patience=5,
-            min_delta=0.005,
+            epochs=2,
             val_fraction=0.5,
-            seed=0,
+            split_seed=0,
+            training_seed=0,
             device="cpu",
             hvg_names=("G1", "G2", "G3"),
         ),
+        output_dir=tmp_path,
         log=False,
     )
-    assert result.stopped_early is False
-    assert result.stop_epoch == 6
-    assert result.best_epoch == 1
-    assert result.best_val_auprc == pytest.approx(0.50)
-    assert len(result.history) == 7
-    assert [row.val["auprc"] for row in result.history] == values
+    assert result.swa_n_averaged == 0
+    assert result.swa_threshold is None
+    assert not (tmp_path / "swa.pt").exists()
+
+
+def test_cli_swa_flag_is_off_by_default() -> None:
+    from src.train.__main__ import parse_args
+
+    args = parse_args(["--output-dir", "out"])
+    assert args.swa is False
+    assert args.swa_start is None
+    assert args.swa_freq == 1
+    swa_args = parse_args(["--swa", "--swa-start", "45", "--swa-freq", "1", "--swa-lr", "0.001"])
+    assert swa_args.swa is True
+    assert swa_args.swa_start == 45
+    assert swa_args.swa_lr == 0.001
 
 

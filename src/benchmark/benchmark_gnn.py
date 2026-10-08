@@ -5,7 +5,7 @@ builds cell-cell edges. A SAGE GNN pools cells to one R/NR score.
 Pass the HTG ``split.json`` (or sample-id lists) so the split matches the
 other baselines. Hyperparameters are scored on the given val fold.
 
-``python benchmark_gnn.py predict --checkpoint RUN_DIR --dataset-root NEW_H5ADS --output-dir OUT``
+``python benchmark/benchmark_gnn.py predict --checkpoint RUN_DIR --dataset-root NEW_H5ADS --output-dir OUT``
 scores unseen sample h5ads with the saved model. Gene names are aligned by
 name; genes missing from a new file are filled with 0.
 """
@@ -23,7 +23,7 @@ from joblib import dump, load
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
-_PACKAGE_ROOT = Path(__file__).resolve().parent
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
@@ -37,7 +37,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GATv2Conv, GraphConv, global_mean_pool
 from torch_geometric.utils import to_undirected
 
-from src.train.benchmark_data import (
+from benchmark.benchmark_data import (
     LABEL_TO_Y,
     add_data_args,
     add_predict_args,
@@ -108,6 +108,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num-cells", type=int, default=128)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--params-json", type=Path, default=None)
     return parser.parse_args(argv)
 
 
@@ -285,17 +286,21 @@ def main_train(argv: list[str] | None = None) -> None:
         test_cells = scale_cells(test_cells, scaler)
     print(f"features={len(genes)} cells={args.num_cells}")
 
-    best_params, search_rows = tune(
-        train_cells,
-        y_train,
-        val_cells,
-        y_val,
-        in_dim=len(genes),
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        device=device,
-        seed=args.seed,
-    )
+    if args.params_json is None:
+        best_params, search_rows = tune(
+            train_cells,
+            y_train,
+            val_cells,
+            y_val,
+            in_dim=len(genes),
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            device=device,
+            seed=args.seed,
+        )
+    else:
+        best_params = json.loads(args.params_json.read_text())
+        search_rows = []
     print(f"best_params={best_params}")
     seed_everything(args.seed)
     train_loader = make_loader(train_cells, y_train, best_params["k"], args.batch_size, shuffle=True)
@@ -363,7 +368,8 @@ def main_train(argv: list[str] | None = None) -> None:
     )
     (out / "gene_universe.txt").write_text("\n".join(genes) + "\n")
     (out / "best_params.json").write_text(json.dumps(best_params, indent=2) + "\n")
-    write_search_csv(out / "hyperparam_search.csv", search_rows)
+    if search_rows:
+        write_search_csv(out / "hyperparam_search.csv", search_rows)
     write_history_csv(out / "history.csv", history)
     torch.save(model.state_dict(), out / "model.pt")
     dump(

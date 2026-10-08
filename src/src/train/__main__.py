@@ -70,10 +70,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Minimum validation-AUPRC improvement required to reset patience",
     )
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--optimizer", choices=("adam", "adamw"), default="adam")
     parser.add_argument("--val-fraction", type=float, default=0.25)
     parser.add_argument("--test-fraction", type=float, default=0.0)
+    parser.add_argument(
+        "--cancer-proportional-split",
+        "-cancer-proportional-split",
+        action="store_true",
+        help="Stratify the patient-disjoint train/val/test split by cancer type and response",
+    )
     parser.add_argument("--n-hvg", type=int, default=500)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=0,
+        help="Random seed used only for the patient-disjoint train/val/test split",
+    )
+    parser.add_argument(
+        "--training-seed",
+        type=int,
+        default=0,
+        help="Random seed for weights, data order, cell sampling, dropout, and CUDA",
+    )
     parser.add_argument(
         "--device",
         choices=("auto", "cpu", "cuda"),
@@ -94,6 +112,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Record per-graph size and one forward/backward memory+runtime pass before training",
     )
+    parser.add_argument(
+        "--swa",
+        action="store_true",
+        help="Keep a separate SWA weight average; does not replace the best validation checkpoint",
+    )
+    parser.add_argument(
+        "--swa-start",
+        type=int,
+        default=None,
+        help="First 0-based epoch to enter the SWA average. Default: last 25%% of --epochs",
+    )
+    parser.add_argument(
+        "--swa-freq",
+        type=int,
+        default=1,
+        help="Update the SWA average every this many epochs after --swa-start",
+    )
+    parser.add_argument(
+        "--swa-lr",
+        type=float,
+        default=None,
+        help="Constant SWA learning rate after --swa-start. Default: the current --lr",
+    )
     return parser.parse_args(argv)
 
 
@@ -103,7 +144,7 @@ def parse_predict_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--checkpoint",
         type=Path,
         required=True,
-        help="best.pt, or a training output directory that contains it",
+        help="best.pt, swa.pt, or a training output directory (loads best.pt)",
     )
     parser.add_argument(
         "--dataset-root",
@@ -154,16 +195,23 @@ def main_train(argv: list[str] | None = None) -> None:
             patience=args.patience,
             min_delta=args.min_delta,
             lr=args.lr,
+            optimizer=args.optimizer,
             val_fraction=args.val_fraction,
             test_fraction=args.test_fraction,
+            cancer_proportional_split=args.cancer_proportional_split,
             n_hvg=args.n_hvg,
             cache_samples=not args.no_cache_samples,
             use_pos_weight=not args.no_pos_weight,
-            seed=args.seed,
+            split_seed=args.split_seed,
+            training_seed=args.training_seed,
             device=args.device,
             threshold=args.threshold,
             threshold_strategy=args.threshold_strategy,
             profile=args.profile,
+            swa=args.swa,
+            swa_start=args.swa_start,
+            swa_freq=args.swa_freq,
+            swa_lr=args.swa_lr,
         ),
         output_dir=args.output_dir,
     )
@@ -171,6 +219,11 @@ def main_train(argv: list[str] | None = None) -> None:
         f"best_epoch={result.best_epoch} stop_epoch={result.stop_epoch} "
         f"best_val_auprc={'nan' if result.best_val_auprc != result.best_val_auprc else f'{result.best_val_auprc:.4f}'} "
         f"threshold={result.threshold:.4f} output_dir={result.output_dir}"
+        + (
+            f" swa_n_averaged={result.swa_n_averaged} swa_threshold={result.swa_threshold:.4f}"
+            if result.swa_n_averaged
+            else ""
+        )
     )
 
 

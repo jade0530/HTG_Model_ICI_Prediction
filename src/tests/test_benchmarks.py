@@ -5,12 +5,13 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
-from src.train.benchmark_data import (
+from benchmark.benchmark_data import (
     align_cell_matrix,
     align_mean_vector,
     assign_split,
@@ -74,8 +75,23 @@ def test_score_metrics_include_htg_keys() -> None:
     assert metrics["acc"] == 1.0
 
 
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("random_forest", 72),
+        ("linear_regression", 45),
+        ("mlp", 48),
+        ("gnn", 16),
+    ],
+)
+def test_repeated_benchmark_parameter_grids(model: str, expected: int) -> None:
+    from benchmark.run_repeated_benchmark import parameter_grid
+
+    assert len(parameter_grid(model)) == expected
+
+
 def test_linear_sgd_writes_epoch_history() -> None:
-    import benchmark_linear_regression as lin
+    from benchmark import benchmark_linear_regression as lin
 
     rng = np.random.default_rng(0)
     X_train = rng.normal(size=(20, 8))
@@ -89,7 +105,7 @@ def test_linear_sgd_writes_epoch_history() -> None:
 
 
 def test_random_forest_grows_tree_history() -> None:
-    import benchmark_random_forest as rf
+    from benchmark import benchmark_random_forest as rf
 
     rng = np.random.default_rng(0)
     X_train = rng.normal(size=(20, 8))
@@ -111,7 +127,7 @@ def test_random_forest_grows_tree_history() -> None:
 
 
 def test_mlp_writes_epoch_history() -> None:
-    import benchmark_mlp as mlp
+    from benchmark import benchmark_mlp as mlp
 
     rng = np.random.default_rng(0)
     X_train = rng.normal(size=(20, 8))
@@ -156,7 +172,7 @@ def test_write_predict_report_writes_metrics_and_confusion(tmp_path: Path) -> No
 
 def test_random_forest_predict_on_unaligned_h5ad(tmp_path: Path) -> None:
     import anndata as ad
-    import benchmark_random_forest as rf
+    from benchmark import benchmark_random_forest as rf
     from joblib import dump
     from sklearn.ensemble import RandomForestClassifier
 
@@ -200,7 +216,7 @@ def test_align_cell_matrix_maps_overlapping_genes() -> None:
 
 
 def test_gnn_knn_and_epoch_history() -> None:
-    import benchmark_gnn as gnn
+    from benchmark import benchmark_gnn as gnn
 
     rng = np.random.default_rng(0)
     train_cells = [rng.normal(size=(8, 6)).astype(np.float32) for _ in range(6)]
@@ -235,7 +251,7 @@ def test_gnn_knn_and_epoch_history() -> None:
 
 def test_gnn_predict_on_unaligned_h5ad(tmp_path: Path) -> None:
     import anndata as ad
-    import benchmark_gnn as gnn
+    from benchmark import benchmark_gnn as gnn
     from joblib import dump
     from sklearn.preprocessing import StandardScaler
 

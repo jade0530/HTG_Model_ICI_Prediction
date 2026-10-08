@@ -4,7 +4,7 @@ Each h5ad is one sample. Features are the mean of ``adata.X`` over cells.
 Pass the HTG ``split.json`` (or sample-id lists) so train/val/test patients
 match the graph model. Hyperparameters are scored on the given val fold.
 
-``python benchmark_random_forest.py predict --checkpoint RUN_DIR --dataset-root NEW_H5ADS --output-dir OUT``
+``python benchmark/benchmark_random_forest.py predict --checkpoint RUN_DIR --dataset-root NEW_H5ADS --output-dir OUT``
 scores unseen sample h5ads with the saved model. Gene names are aligned by
 name; genes missing from a new file are filled with 0.
 """
@@ -22,11 +22,11 @@ from joblib import dump
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import log_loss
 
-_PACKAGE_ROOT = Path(__file__).resolve().parent
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
-from src.train.benchmark_data import (
+from benchmark.benchmark_data import (
     add_data_args,
     add_predict_args,
     assign_split,
@@ -54,6 +54,7 @@ CLASS_WEIGHT = (None, "balanced")
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Random-forest baseline on raw sample h5ads")
     add_data_args(parser)
+    parser.add_argument("--params-json", type=Path, default=None)
     parser.add_argument(
         "--tree-step",
         type=int,
@@ -148,7 +149,11 @@ def main_train(argv: list[str] | None = None) -> None:
     test = build_fold(folds["test"], genes) if folds["test"] else None
     print(f"features={len(genes)} matrix={train.X.shape}")
 
-    best_params, search_rows = tune(train.X, train.y, val.X, val.y, args.seed)
+    if args.params_json is None:
+        best_params, search_rows = tune(train.X, train.y, val.X, val.y, args.seed)
+    else:
+        best_params = json.loads(args.params_json.read_text())
+        search_rows = []
     print(f"best_params={best_params}")
     model, history = fit_history(best_params, train.X, train.y, val.X, val.y, args.seed, args.tree_step)
 
@@ -194,7 +199,8 @@ def main_train(argv: list[str] | None = None) -> None:
     )
     (out / "gene_universe.txt").write_text("\n".join(genes) + "\n")
     (out / "best_params.json").write_text(json.dumps(best_params, indent=2) + "\n")
-    write_search_csv(out / "hyperparam_search.csv", search_rows)
+    if search_rows:
+        write_search_csv(out / "hyperparam_search.csv", search_rows)
     write_history_csv(out / "history.csv", history)
     dump(
         {

@@ -1,11 +1,11 @@
-"""Linear-regression sample-level ICI baseline on raw h5ad expression.
+"""MLP sample-level ICI baseline on raw h5ad expression.
 
 Each h5ad is one sample. Features are the mean of ``adata.X`` over cells.
-The model is SGD linear regression on labels {0, 1}; predicted values are
-the ranking scores. Pass the HTG ``split.json`` (or sample-id lists) so the
-split matches the graph model. Hyperparameters are scored on the given val fold.
+The model is an sklearn MLPClassifier; predicted P(R) is the ranking score.
+Pass the HTG ``split.json`` (or sample-id lists) so the split matches the
+graph model. Hyperparameters are scored on the given val fold.
 
-``python benchmark_linear_regression.py predict --checkpoint RUN_DIR --dataset-root NEW_H5ADS --output-dir OUT``
+``python benchmark/benchmark_mlp.py predict --checkpoint RUN_DIR --dataset-root NEW_H5ADS --output-dir OUT``
 scores unseen sample h5ads with the saved model. Gene names are aligned by
 name; genes missing from a new file are filled with 0.
 """
@@ -20,15 +20,15 @@ from pathlib import Path
 
 import numpy as np
 from joblib import dump
-from sklearn.linear_model import SGDRegressor
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import log_loss
+from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
-_PACKAGE_ROOT = Path(__file__).resolve().parent
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
-from src.train.benchmark_data import (
+from benchmark.benchmark_data import (
     add_data_args,
     add_predict_args,
     assign_split,
@@ -46,48 +46,46 @@ from src.train.loop import EpochResult
 from src.train.metrics import format_metrics, select_threshold
 from src.train.report import write_run_report
 
-ALPHAS = (1e-4, 1e-3, 1e-2, 1e-1, 1.0)
-ETA0S = (1e-3, 1e-2, 1e-1)
-PENALTIES = ("l2", "elasticnet")
-L1_RATIOS = (0.15, 0.5)
+HIDDEN_LAYERS = ((64,), (128,), (64, 32), (128, 64))
+ALPHAS = (1e-4, 1e-3, 1e-2)
+LEARNING_RATES = (1e-3, 1e-2)
+ACTIVATIONS = ("relu", "tanh")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Linear-regression baseline on raw sample h5ads")
+    parser = argparse.ArgumentParser(description="MLP baseline on raw sample h5ads")
     add_data_args(parser)
     parser.add_argument("--epochs", type=int, default=40)
+    parser.add_argument("--params-json", type=Path, default=None)
     return parser.parse_args(argv)
 
 
-def to_scores(raw: np.ndarray) -> np.ndarray:
-    return np.clip(np.asarray(raw, dtype=np.float64).reshape(-1), 0.0, 1.0)
+def predict_scores(model: MLPClassifier, X: np.ndarray) -> np.ndarray:
+    return model.predict_proba(X)[:, 1]
 
 
-def predict_scores(model: SGDRegressor, X: np.ndarray) -> np.ndarray:
-    return to_scores(model.predict(X))
+def fold_metrics(model: MLPClassifier, X: np.ndarray, y: np.ndarray, threshold: float) -> dict[str, float]:
+    scores = predict_scores(model, X)
+    return score_metrics(y, scores, threshold=threshold, loss=log_loss(y, scores, labels=[0, 1]))
 
 
-def fold_metrics(model: SGDRegressor, X: np.ndarray, y: np.ndarray, threshold: float) -> dict[str, float]:
-    raw = model.predict(X)
-    scores = to_scores(raw)
-    return score_metrics(y, scores, threshold=threshold, loss=mean_squared_error(y, raw))
-
-
-def make_model(params: dict, seed: int) -> SGDRegressor:
-    return SGDRegressor(
-        loss="squared_error",
-        learning_rate="constant",
+def make_model(params: dict, seed: int) -> MLPClassifier:
+    return MLPClassifier(
+        solver="adam",
+        max_iter=1,
+        warm_start=True,
         random_state=seed,
         **params,
     )
 
 
-def run_epochs(model: SGDRegressor, X_train, y_train, X_val, y_val, epochs: int, seed: int) -> list[EpochResult]:
+def run_epochs(model: MLPClassifier, X_train, y_train, X_val, y_val, epochs: int, seed: int) -> list[EpochResult]:
     rng = np.random.default_rng(seed)
     history: list[EpochResult] = []
+    classes = np.array([0, 1], dtype=np.int64)
     for epoch in range(epochs):
         order = rng.permutation(len(y_train))
-        model.partial_fit(X_train[order], y_train[order])
+        model.partial_fit(X_train[order], y_train[order], classes=classes)
         history.append(
             EpochResult(
                 epoch=epoch,
@@ -102,22 +100,31 @@ def tune(X_train, y_train, X_val, y_val, epochs: int, seed: int) -> tuple[dict, 
     rows = []
     best_params = None
     best_auprc = -1.0
-    for alpha, eta0, penalty in product(ALPHAS, ETA0S, PENALTIES):
-        l1_values = L1_RATIOS if penalty == "elasticnet" else (0.15,)
-        for l1_ratio in l1_values:
-            params = {"alpha": alpha, "eta0": eta0, "penalty": penalty, "l1_ratio": l1_ratio}
-            model = make_model(params, seed)
-            history = run_epochs(model, X_train, y_train, X_val, y_val, epochs, seed)
-            metrics = history[-1].val
-            row = {**params, **{f"val_{key}": value for key, value in metrics.items()}}
-            rows.append(row)
-            print(
-                f"linreg alpha={alpha} eta0={eta0} penalty={penalty} "
-                f"l1_ratio={l1_ratio} val_auprc={metrics['auprc']:.4f}"
-            )
-            if metrics["auprc"] > best_auprc:
-                best_auprc = metrics["auprc"]
-                best_params = params
+    for hidden, alpha, lr, activation in product(HIDDEN_LAYERS, ALPHAS, LEARNING_RATES, ACTIVATIONS):
+        params = {
+            "hidden_layer_sizes": hidden,
+            "alpha": alpha,
+            "learning_rate_init": lr,
+            "activation": activation,
+        }
+        model = make_model(params, seed)
+        history = run_epochs(model, X_train, y_train, X_val, y_val, epochs, seed)
+        metrics = history[-1].val
+        row = {
+            "hidden_layer_sizes": str(hidden),
+            "alpha": alpha,
+            "learning_rate_init": lr,
+            "activation": activation,
+            **{f"val_{key}": value for key, value in metrics.items()},
+        }
+        rows.append(row)
+        print(
+            f"mlp hidden={hidden} alpha={alpha} lr={lr} "
+            f"activation={activation} val_auprc={metrics['auprc']:.4f}"
+        )
+        if metrics["auprc"] > best_auprc:
+            best_auprc = metrics["auprc"]
+            best_params = params
     return best_params, rows
 
 
@@ -147,7 +154,14 @@ def main_train(argv: list[str] | None = None) -> None:
     X_test = scaler.transform(test.X) if test is not None else None
     print(f"features={len(genes)} matrix={X_train.shape}")
 
-    best_params, search_rows = tune(X_train, train.y, X_val, val.y, args.epochs, args.seed)
+    if args.params_json is None:
+        best_params, search_rows = tune(
+            X_train, train.y, X_val, val.y, args.epochs, args.seed
+        )
+    else:
+        best_params = json.loads(args.params_json.read_text())
+        best_params["hidden_layer_sizes"] = tuple(best_params["hidden_layer_sizes"])
+        search_rows = []
     print(f"best_params={best_params}")
     model = make_model(best_params, args.seed)
     history = run_epochs(model, X_train, train.y, X_val, val.y, args.epochs, args.seed)
@@ -155,22 +169,25 @@ def main_train(argv: list[str] | None = None) -> None:
         print(f"epoch {row.epoch} {format_metrics('train', row.train)}")
         print(f"epoch {row.epoch} {format_metrics('val', row.val)}")
 
-    train_scores = to_scores(model.predict(X_train))
-    val_scores = to_scores(model.predict(X_val))
+    train_scores = predict_scores(model, X_train)
+    val_scores = predict_scores(model, X_val)
     threshold = select_threshold(
         val.y, val_scores, strategy=args.threshold_strategy, fixed=args.threshold
     )
     predictions = {"train": (train.y, train_scores), "val": (val.y, val_scores)}
     if X_test is not None:
-        predictions["test"] = (test.y, to_scores(model.predict(X_test)))
+        predictions["test"] = (test.y, predict_scores(model, X_test))
 
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(
         json.dumps(
             {
-                "model": "linear_regression_sgd",
-                "best_params": best_params,
+                "model": "mlp",
+                "best_params": {
+                    **best_params,
+                    "hidden_layer_sizes": list(best_params["hidden_layer_sizes"]),
+                },
                 "epochs": args.epochs,
                 "n_hvg": args.n_hvg,
                 "n_features": len(genes),
@@ -197,8 +214,12 @@ def main_train(argv: list[str] | None = None) -> None:
         + "\n"
     )
     (out / "gene_universe.txt").write_text("\n".join(genes) + "\n")
-    (out / "best_params.json").write_text(json.dumps(best_params, indent=2) + "\n")
-    write_search_csv(out / "hyperparam_search.csv", search_rows)
+    (out / "best_params.json").write_text(
+        json.dumps({**best_params, "hidden_layer_sizes": list(best_params["hidden_layer_sizes"])}, indent=2)
+        + "\n"
+    )
+    if search_rows:
+        write_search_csv(out / "hyperparam_search.csv", search_rows)
     write_history_csv(out / "history.csv", history)
     dump(
         {
@@ -221,7 +242,7 @@ def main_train(argv: list[str] | None = None) -> None:
 
 
 def parse_predict_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Score unseen h5ads with a saved linear-regression run")
+    parser = argparse.ArgumentParser(description="Score unseen h5ads with a saved MLP run")
     add_predict_args(parser)
     return parser.parse_args(argv)
 
