@@ -1,6 +1,6 @@
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_42_split_1 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_1 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -12,9 +12,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -26,7 +26,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_43_split_1 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_1 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -38,9 +38,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -52,7 +52,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_44_split_1 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_1 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -64,9 +64,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -79,7 +79,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_42_split_2 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_2 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -91,9 +91,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -105,7 +105,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_43_split_2 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_2 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -117,9 +117,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -131,7 +131,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_44_split_2 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_2 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -143,9 +143,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -157,7 +157,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_42_split_3 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_3 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -169,9 +169,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -183,7 +183,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_43_split_3 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_3 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -195,9 +195,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -209,7 +209,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_44_split_3 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_3 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -221,9 +221,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -235,7 +235,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_42_split_4 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_4 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -247,9 +247,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -261,7 +261,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_43_split_4 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_4 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -273,9 +273,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -287,7 +287,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_44_split_4 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_4 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -299,9 +299,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -313,7 +313,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_42_split_5 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_5 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -325,9 +325,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -339,7 +339,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_43_split_5 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_5 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -351,9 +351,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
@@ -365,7 +365,7 @@ python -m src.train \
 
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/learning_rate/0_0005/seed_44_split_5 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_5 \
   --encoder sage \
   --pooling mean \
   --readout cell \
@@ -377,9 +377,9 @@ python -m src.train \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 2 \
+  --batch-size 4 \
   --epochs 60 \
-  --lr 0.0005 \
+  --lr 0.001 \
   --val-fraction 0.25 \
   --test-fraction 0.0 \
   --no-early-stopping \
