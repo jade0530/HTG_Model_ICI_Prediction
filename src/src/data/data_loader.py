@@ -15,6 +15,7 @@ import numpy as np
 from scipy import sparse
 
 from .gene_harmonise_celltypist import harmonise_and_annotate
+from .gene_symbols import apply_expression, map_adata_gene_symbols, map_gene_names
 
 
 ExpressionMatrix = np.ndarray | sparse.spmatrix
@@ -189,14 +190,14 @@ def select_sample_hvgs(adata: object, *, n_hvg: int = DEFAULT_N_HVG) -> tuple[st
 
 def _item_expression_and_genes(item: object) -> tuple[ExpressionMatrix, tuple[str, ...]]:
     if isinstance(item, AnnDataSample):
-        return item.X, tuple(str(name) for name in item.gene_names)
+        return apply_expression(item.X, tuple(str(name) for name in item.gene_names))
     h5ad_path = getattr(item, "h5ad_path", None)
     if h5ad_path is None:
-        return item.X, tuple(str(name) for name in item.gene_names)
+        return apply_expression(item.X, tuple(str(name) for name in item.gene_names))
     import anndata as ad
 
     adata = ad.read_h5ad(h5ad_path)
-    return adata.X, tuple(str(name) for name in adata.var_names)
+    return apply_expression(adata.X, tuple(str(name) for name in adata.var_names))
 
 
 def _vstack_expression(matrices: Sequence[ExpressionMatrix]) -> ExpressionMatrix:
@@ -300,7 +301,10 @@ def sample_from_anndata(
             hg19_gtf=hg19_gtf,
             target_hg38_gff=target_hg38_gff,
         )
+    adata = map_adata_gene_symbols(adata)
     gene_names = tuple(str(name) for name in adata.var_names)
+    if hvg_names is not None:
+        hvg_names = map_gene_names(hvg_names)
     annotation_keys = CELL_ANNOTATION_KEYS + MAIN_CELL_TYPE_KEYS
     cell_annotation = _copy_obs(adata, annotation_keys) if load_cell_annotation else {}
     clinical_metadata = (

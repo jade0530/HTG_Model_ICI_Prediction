@@ -254,7 +254,9 @@ def read_gene_names(h5ad_path: Path) -> tuple[str, ...]:
 
     adata = ad.read_h5ad(h5ad_path, backed="r")
     try:
-        return tuple(str(name) for name in adata.var_names)
+        from src.data.gene_symbols import map_gene_names
+
+        return map_gene_names(tuple(str(name) for name in adata.var_names))
     finally:
         if adata.isbacked:
             adata.file.close()

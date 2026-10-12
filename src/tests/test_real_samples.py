@@ -157,7 +157,9 @@ def test_real_samples_load_with_integrated_hvgs(real_samples):
     assert labels <= {"R", "NR"}
     for adata, sample in zip(real_samples["adatas"], real_samples["samples"]):
         assert sample.num_cells == adata.n_obs
-        assert sample.hvg_names == hvg_names
+        from src.data.gene_symbols import map_gene_names
+
+        assert sample.hvg_names == map_gene_names(hvg_names)
         if _has_cell_annotation(adata):
             assert "predicted_labels" in sample.cell_annotation
             labels = np.asarray(sample.cell_annotation["predicted_labels"]).astype(str)
