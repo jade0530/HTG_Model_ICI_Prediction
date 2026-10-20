@@ -76,6 +76,15 @@ def build_sample_global_graph(graphs: Sequence[HeteroData]) -> HeteroData:
     merged[CELL_TO_GENE].edge_weight = weights
     merged[GENE_TO_CELL].edge_index = edge_index.flip(0)
     merged[GENE_TO_CELL].edge_weight = weights.clone()
+    first_fi = ("gene", "fi", "gene")
+    if first_fi in graphs[0].edge_types:
+        src, dst = graphs[0][first_fi].edge_index
+        global_src = graphs[0]["gene"].global_id.long()[src]
+        global_dst = graphs[0]["gene"].global_id.long()[dst]
+        merged[first_fi].edge_index = torch.stack((gid_map[global_src], gid_map[global_dst]))
+        fi_attr = getattr(graphs[0][first_fi], "edge_attr", None)
+        if fi_attr is not None:
+            merged[first_fi].edge_attr = fi_attr.clone()
     merged.y = graphs[0].y.reshape(-1)
     merged.sample_id = str(graphs[0].sample_id)
     merged.patient_id = str(graphs[0].patient_id)

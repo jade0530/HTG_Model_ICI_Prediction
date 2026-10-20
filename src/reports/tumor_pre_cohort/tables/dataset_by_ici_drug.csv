@@ -1,0 +1,18 @@
+dataset_id,ICI treatment type,ICI treatment drug,n_samples,n_patients,n_cells
+GSE246613,Anti-pd-1,Pembrolizumab,103,34,336176
+franken_et_al,Anti-pd-l1,Durvalumab,20,20,166611
+Bassez_et_al,Anti-pd-1,pembrolizumab,40,40,96158
+GSE205506,Anti-pd-1,toripalimab,10,10,79535
+GSE236581,Anti-pd-1,Pembrolizumab,13,13,60064
+GSE236581,Anti-pd-1,Sintilimab,8,8,37811
+GSE123813,Anti-pd-1,Unknown,14,14,35850
+GSE235090,Anti-pd-1,Pembrolizumab,11,11,33639
+GSE179994,Anti-pd-1,Pembrolizumab,8,8,33487
+GSE169246,Anti-pd-l1,atezolizumab,5,5,17672
+GSE235090,Anti-pd-1+aCTLA-4,Nivolumab+Ipilimumab,7,7,15444
+GSE200996,Anti-pd-1+aCTLA-4,Ipilimumab,3,3,11511
+GSE200996,Anti-pd-1,Nivolumab,3,3,8663
+GSE235090,Anti-pd-l1,Avelumab,2,2,8623
+GSE236581,Anti-pd-1,Camrelizumab,1,1,8084
+pozniak_et_al,Anti-pd-1,Pembrolizumab,4,4,743
+pozniak_et_al,Anti-pd-1,Nivolumab,5,4,367

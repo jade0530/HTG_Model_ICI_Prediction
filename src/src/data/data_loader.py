@@ -285,6 +285,7 @@ def sample_from_anndata(
     target_hg38_gff: str | Path | None = None,
     n_hvg: int = DEFAULT_N_HVG,
     hvg_names: Sequence[str] | None = None,
+    map_gene_symbols: bool = True,
 ) -> AnnDataSample:
     """Build the sample contract from a sample-filtered AnnData object.
 
@@ -301,9 +302,10 @@ def sample_from_anndata(
             hg19_gtf=hg19_gtf,
             target_hg38_gff=target_hg38_gff,
         )
-    adata = map_adata_gene_symbols(adata)
+    if map_gene_symbols:
+        adata = map_adata_gene_symbols(adata)
     gene_names = tuple(str(name) for name in adata.var_names)
-    if hvg_names is not None:
+    if hvg_names is not None and map_gene_symbols:
         hvg_names = map_gene_names(hvg_names)
     annotation_keys = CELL_ANNOTATION_KEYS + MAIN_CELL_TYPE_KEYS
     cell_annotation = _copy_obs(adata, annotation_keys) if load_cell_annotation else {}

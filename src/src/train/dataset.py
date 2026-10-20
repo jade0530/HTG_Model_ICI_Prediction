@@ -23,6 +23,7 @@ from src.data.data_loader import (
 )
 from src.data.sampler import SAMPLING_MODES, CellSampler, select_cells
 from src.graph.build_global_graph import build_sample_global_graph
+from src.fi.sample_edges import SampleFIEdges
 from src.graph.build_local_graph import GeneStrategy, GeneUniverse, build_local_graph
 
 SamplingMode = Literal["random", "proportional", "by_cell_type", "whole_sample"]
@@ -289,6 +290,7 @@ def load_record(
     load_normalised_expression: bool = True,
     load_cell_annotation: bool = True,
     load_clinical_metadata: bool = True,
+    map_gene_symbols: bool = True,
 ) -> AnnDataSample:
     """Load one h5ad file into the Stage 1 sample contract."""
     import anndata as ad
@@ -307,6 +309,7 @@ def load_record(
         load_clinical_metadata=load_clinical_metadata,
         n_hvg=n_hvg,
         hvg_names=hvg_names,
+        map_gene_symbols=map_gene_symbols,
     )
 
 
@@ -386,6 +389,8 @@ class SampleGraphDataset(Dataset):
         n_hvg: int = DEFAULT_N_HVG,
         hvg_names: Sequence[str] | None = None,
         cache_samples: bool = False,
+        fi_edges: SampleFIEdges | None = None,
+        map_gene_symbols: bool = True,
     ) -> None:
         if not items:
             raise ValueError("SampleGraphDataset requires at least one sample")
@@ -405,6 +410,8 @@ class SampleGraphDataset(Dataset):
         self.n_hvg = int(n_hvg)
         self.hvg_names = None if not hvg_names else tuple(str(name) for name in hvg_names)
         self.cache_samples = cache_samples
+        self.fi_edges = fi_edges
+        self.map_gene_symbols = map_gene_symbols
         self._rng = np.random.default_rng(seed)
         self._cache: dict[int, SampleData] = {}
         self.views = self._build_views()
@@ -450,7 +457,12 @@ class SampleGraphDataset(Dataset):
             hvg_names = None
         else:
             hvg_names = ()
-        sample = load_record(item, hvg_names=hvg_names, n_hvg=self.n_hvg)
+        sample = load_record(
+            item,
+            hvg_names=hvg_names,
+            n_hvg=self.n_hvg,
+            map_gene_symbols=self.map_gene_symbols,
+        )
         if self.cache_samples:
             self._cache[index] = sample
         return sample
@@ -486,6 +498,7 @@ class SampleGraphDataset(Dataset):
             cells,
             self.gene_universe,
             gene_strategy=self.gene_strategy,
+            fi_edges=self.fi_edges,
         )
         graph["cell"].x = torch.ones((int(graph["cell"].num_nodes), 1), dtype=torch.float32)
         graph.cell_type = cell_type or ""

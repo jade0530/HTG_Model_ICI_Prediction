@@ -11,6 +11,7 @@ from scipy import sparse
 from torch_geometric.data import HeteroData
 
 from src.data.data_loader import SampleData
+from src.fi.sample_edges import SampleFIEdges
 
 GeneStrategy = Literal["expressed", "hvg"]
 
@@ -70,6 +71,7 @@ def build_local_graph(
     gene_universe: GeneUniverse | None = None,
     *,
     gene_strategy: GeneStrategy = "hvg",
+    fi_edges: SampleFIEdges | None = None,
 ) -> HeteroData:
     """Build cell->gene expression edges and their exact reverse.
 
@@ -114,22 +116,33 @@ def build_local_graph(
         target = "sample HVGs" if gene_strategy == "hvg" else "gene universe"
         raise ValueError(f"sampled cells have no positive expression in the {target}")
 
-    global_to_local = {int(gid): local for local, gid in enumerate(expressed_global_ids)}
-    local_gene = np.fromiter(
-        (global_to_local[int(gid)] for gid in universe_columns), dtype=np.int64
-    )
-    edge_index = torch.tensor(np.stack((rows, local_gene)), dtype=torch.long)
     edge_weight = torch.from_numpy(weights)
+    if fi_edges is None:
+        global_to_local = {int(gid): local for local, gid in enumerate(expressed_global_ids)}
+        local_gene = np.fromiter(
+            (global_to_local[int(gid)] for gid in universe_columns), dtype=np.int64
+        )
+        gene_count = len(expressed_global_ids)
+        gene_global_id = torch.from_numpy(expressed_global_ids.copy())
+    else:
+        local_gene = universe_columns
+        gene_count = len(gene_universe)
+        gene_global_id = torch.arange(gene_count, dtype=torch.long)
+    edge_index = torch.tensor(np.stack((rows, local_gene)), dtype=torch.long)
 
     graph = HeteroData()
     graph["cell"].num_nodes = len(cells)
     graph["cell"].source_index = torch.from_numpy(cells.copy())
-    graph["gene"].num_nodes = len(expressed_global_ids)
-    graph["gene"].global_id = torch.from_numpy(expressed_global_ids.copy())
+    graph["gene"].num_nodes = gene_count
+    graph["gene"].global_id = gene_global_id
     graph["cell", "expresses", "gene"].edge_index = edge_index
     graph["cell", "expresses", "gene"].edge_weight = edge_weight
     graph["gene", "expressed_by", "cell"].edge_index = edge_index.flip(0)
     graph["gene", "expressed_by", "cell"].edge_weight = edge_weight.clone()
+    if fi_edges is not None:
+        graph["gene", "fi", "gene"].edge_index = fi_edges.edge_index.clone()
+        if fi_edges.edge_attr is not None:
+            graph["gene", "fi", "gene"].edge_attr = fi_edges.edge_attr.clone()
     graph.sample_id = str(sample.sample_id)
     graph.patient_id = str(sample.patient_id)
     graph.gene_strategy = gene_strategy

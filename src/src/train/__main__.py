@@ -81,6 +81,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--n-hvg", type=int, default=500)
     parser.add_argument(
+        "--hvg-file",
+        type=Path,
+        default=None,
+        help="Frozen GeneUniverse, one gene symbol per line. Skips a new HVG selection",
+    )
+    parser.add_argument(
         "--split-seed",
         type=int,
         default=0,
@@ -107,6 +113,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--no-cache-samples", action="store_true")
     parser.add_argument("--no-pos-weight", action="store_true")
+    parser.add_argument(
+        "--gene-prior",
+        choices=("none", "fi_topology_frozen", "fi_semantic_frozen"),
+        default="none",
+        help="Add a frozen FI gene embedding through a trainable projection. none keeps the base gene embedding",
+    )
+    parser.add_argument(
+        "--fi-embedding-path",
+        type=Path,
+        default=None,
+        help="Optional FI embedding file. Defaults to the topology or semantic pretraining output",
+    )
+    parser.add_argument(
+        "--fi-mode",
+        choices=("baseline", "fi_topology", "fi_relation_aware"),
+        default="baseline",
+        help="Add the same curated FI gene-gene edges to every sample graph. baseline leaves the cell-gene graph unchanged",
+    )
+    parser.add_argument(
+        "--fi-graph-json",
+        type=Path,
+        default=None,
+        help="Curated FI graph JSON. Predicted edges are excluded",
+    )
     parser.add_argument(
         "--profile",
         action="store_true",
@@ -162,6 +192,11 @@ def parse_predict_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override the checkpoint device. auto/cuda use GPU 1; cpu forces CPU",
     )
+    parser.add_argument(
+        "--no-gene-symbols",
+        action="store_true",
+        help="Keep var_names as stored. Do not map Ensembl IDs to gene symbols",
+    )
     return parser.parse_args(argv)
 
 
@@ -200,6 +235,11 @@ def main_train(argv: list[str] | None = None) -> None:
             test_fraction=args.test_fraction,
             cancer_proportional_split=args.cancer_proportional_split,
             n_hvg=args.n_hvg,
+            hvg_names=(
+                ()
+                if args.hvg_file is None
+                else tuple(line.strip() for line in args.hvg_file.read_text().splitlines() if line.strip())
+            ),
             cache_samples=not args.no_cache_samples,
             use_pos_weight=not args.no_pos_weight,
             split_seed=args.split_seed,
@@ -208,6 +248,10 @@ def main_train(argv: list[str] | None = None) -> None:
             threshold=args.threshold,
             threshold_strategy=args.threshold_strategy,
             profile=args.profile,
+            gene_prior=args.gene_prior,
+            fi_embedding_path="" if args.fi_embedding_path is None else str(args.fi_embedding_path),
+            fi_mode=args.fi_mode,
+            fi_graph_json="" if args.fi_graph_json is None else str(args.fi_graph_json),
             swa=args.swa,
             swa_start=args.swa_start,
             swa_freq=args.swa_freq,
@@ -242,6 +286,7 @@ def main_predict(argv: list[str] | None = None) -> None:
         args.checkpoint,
         output_dir=args.output_dir,
         device=args.device,
+        map_gene_symbols=not args.no_gene_symbols,
     )
     print(f"wrote {result['output_dir']}/predictions.csv")
 

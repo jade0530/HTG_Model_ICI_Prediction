@@ -1,0 +1,51 @@
+architecture,cohort,metric,n,mean,sample_sd,variance
+bioMESH,val,acc,15,0.712370,0.049812,0.002481
+bioMESH,val,balanced_acc,0,,,
+bioMESH,val,auroc,15,0.748675,0.026347,0.000694
+bioMESH,val,auprc,15,0.781526,0.027840,0.000775
+bioMESH,val,f1,15,0.756885,0.025098,0.000630
+bioMESH,unseen,acc,15,0.608130,0.040674,0.001654
+bioMESH,unseen,balanced_acc,15,0.487949,0.021259,0.000452
+bioMESH,unseen,auroc,15,0.466154,0.051110,0.002612
+bioMESH,unseen,auprc,15,0.635495,0.028251,0.000798
+bioMESH,unseen,f1,15,0.749891,0.040721,0.001658
+Random forest,val,acc,15,0.704406,0.029061,0.000845
+Random forest,val,balanced_acc,15,0.697198,0.031883,0.001017
+Random forest,val,auroc,15,0.750374,0.025352,0.000643
+Random forest,val,auprc,15,0.794236,0.035714,0.001276
+Random forest,val,f1,15,0.747521,0.030059,0.000904
+Random forest,unseen,acc,15,0.567480,0.090543,0.008198
+Random forest,unseen,balanced_acc,15,0.501026,0.031672,0.001003
+Random forest,unseen,auroc,15,0.536239,0.040967,0.001678
+Random forest,unseen,auprc,15,0.702985,0.025525,0.000652
+Random forest,unseen,f1,15,0.648146,0.180496,0.032579
+Linear regression,val,acc,15,0.665208,0.070047,0.004907
+Linear regression,val,balanced_acc,15,0.653336,0.078560,0.006172
+Linear regression,val,auroc,15,0.677996,0.095576,0.009135
+Linear regression,val,auprc,15,0.690952,0.088957,0.007913
+Linear regression,val,f1,15,0.725141,0.025033,0.000627
+Linear regression,unseen,acc,15,0.613008,0.037860,0.001433
+Linear regression,unseen,balanced_acc,15,0.488034,0.020665,0.000427
+Linear regression,unseen,auroc,15,0.550855,0.064780,0.004196
+Linear regression,unseen,auprc,15,0.724322,0.054145,0.002932
+Linear regression,unseen,f1,15,0.756063,0.037742,0.001424
+MLP,val,acc,15,0.629040,0.055826,0.003117
+MLP,val,balanced_acc,15,0.618077,0.058356,0.003405
+MLP,val,auroc,15,0.673099,0.040239,0.001619
+MLP,val,auprc,15,0.726514,0.044916,0.002017
+MLP,val,f1,15,0.712931,0.025988,0.000675
+MLP,unseen,acc,15,0.601626,0.043890,0.001926
+MLP,unseen,balanced_acc,15,0.484701,0.032691,0.001069
+MLP,unseen,auroc,15,0.428376,0.033732,0.001138
+MLP,unseen,auprc,15,0.612520,0.017581,0.000309
+MLP,unseen,f1,15,0.744032,0.040160,0.001613
+GNN,val,acc,15,0.627207,0.067031,0.004493
+GNN,val,balanced_acc,15,0.614547,0.063764,0.004066
+GNN,val,auroc,15,0.695099,0.030426,0.000926
+GNN,val,auprc,15,0.733150,0.059454,0.003535
+GNN,val,f1,15,0.721109,0.039556,0.001565
+GNN,unseen,acc,15,0.586992,0.070489,0.004969
+GNN,unseen,balanced_acc,15,0.477863,0.037001,0.001369
+GNN,unseen,auroc,15,0.371966,0.054535,0.002974
+GNN,unseen,auprc,15,0.596924,0.037081,0.001375
+GNN,unseen,f1,15,0.717204,0.115939,0.013442

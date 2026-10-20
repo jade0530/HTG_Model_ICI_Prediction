@@ -1,0 +1,9 @@
+Cancer type,n_datasets,n_samples,n_patients,n_cells
+TNBC,3,148,79,450006
+HNSCC,2,26,26,186785
+CRC,2,32,32,185494
+MCC,1,20,20,57706
+LUAD,1,8,8,33487
+BCC,1,11,11,25308
+SCC,1,3,3,10542
+Melanoma,1,9,8,1110

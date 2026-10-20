@@ -17,6 +17,8 @@ Readout = Literal["cell", "gene", "both"]
 EncoderKind = Literal["placeholder", "sage", "gat"]
 GENE_TO_CELL = ("gene", "expressed_by", "cell")
 CELL_TO_GENE = ("cell", "expresses", "gene")
+GENE_FI = ("gene", "fi", "gene")
+FIMode = Literal["baseline", "fi_topology", "fi_relation_aware"]
 
 
 class CellAttentionPool(nn.Module):
@@ -79,14 +81,25 @@ class BipartiteHTGEncoder(nn.Module):
         x_dict: dict[str, Tensor],
         edge_index_dict: dict[tuple[str, str, str], Tensor],
         edge_weight_dict: dict[tuple[str, str, str], Tensor],
+        fi_convs: nn.ModuleList | None = None,
+        fi_edge_index: Tensor | None = None,
+        fi_edge_attr: Tensor | None = None,
     ) -> dict[str, Tensor]:
-        for conv, cell_norm, gene_norm in zip(self.layers, self.cell_norms, self.gene_norms):
+        for index, (conv, cell_norm, gene_norm) in enumerate(
+            zip(self.layers, self.cell_norms, self.gene_norms)
+        ):
             residual = x_dict
             if self.conv_kind == "sage":
                 out = conv(x_dict, edge_index_dict, edge_weight_dict=edge_weight_dict)
             else:
                 edge_attr_dict = {key: _edge_attr(weight) for key, weight in edge_weight_dict.items()}
                 out = conv(x_dict, edge_index_dict, edge_attr_dict=edge_attr_dict)
+            gene_out = out["gene"]
+            if fi_convs is not None and fi_edge_index is not None:
+                if fi_edge_attr is None:
+                    gene_out = gene_out + fi_convs[index](residual["gene"], fi_edge_index)
+                else:
+                    gene_out = gene_out + fi_convs[index](residual["gene"], fi_edge_index, fi_edge_attr)
             x_dict = {
                 "cell": F.dropout(
                     F.relu(cell_norm(out["cell"] + residual["cell"])),
@@ -94,7 +107,7 @@ class BipartiteHTGEncoder(nn.Module):
                     training=self.training,
                 ),
                 "gene": F.dropout(
-                    F.relu(gene_norm(out["gene"] + residual["gene"])),
+                    F.relu(gene_norm(gene_out + residual["gene"])),
                     p=self.dropout,
                     training=self.training,
                 ),
@@ -128,6 +141,55 @@ def _edge_attr(weight: Tensor) -> Tensor:
     return weight.unsqueeze(-1) if weight.dim() == 1 else weight
 
 
+class FITopologyConv(nn.Module):
+    """Mean of neighboring gene states. A gene with no FI edge stays at zero."""
+
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.lin = nn.Linear(hidden_dim, hidden_dim, bias=False)
+
+    def forward(self, x: Tensor, edge_index: Tensor) -> Tensor:
+        out = x.new_zeros(x.shape)
+        if edge_index.numel() == 0:
+            return out
+        src, dst = edge_index
+        message = self.lin(x[src])
+        out.index_add_(0, dst, message)
+        degree = x.new_zeros(x.size(0))
+        degree.index_add_(0, dst, torch.ones(dst.shape[0], device=x.device, dtype=x.dtype))
+        present = degree > 0
+        out[present] = out[present] / degree[present].unsqueeze(-1)
+        return out
+
+
+class FIRelationConv(nn.Module):
+    """Topology message plus a bias-free edge-attribute term.
+
+    ``message = lin(source gene) + edge_lin(FI attributes)``. Mean aggregation
+    matches ``FITopologyConv``. A zero attribute vector adds nothing, and a
+    gene with no FI edge stays at zero. The reverse-edge bit stays inside the
+    attribute vector; it is not a second biological mechanism.
+    """
+
+    def __init__(self, hidden_dim: int, edge_dim: int) -> None:
+        super().__init__()
+        self.lin = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.edge_lin = nn.Linear(edge_dim, hidden_dim, bias=False)
+
+    def forward(self, x: Tensor, edge_index: Tensor, edge_attr: Tensor) -> Tensor:
+        out = x.new_zeros(x.shape)
+        if edge_index.numel() == 0:
+            return out
+        src, dst = edge_index
+        message = self.lin(x[src]) + self.edge_lin(edge_attr)
+        out.index_add_(0, dst, message)
+        degree = x.new_zeros(x.size(0))
+        degree.index_add_(0, dst, torch.ones(dst.shape[0], device=x.device, dtype=x.dtype))
+        present = degree > 0
+        out[present] = out[present] / degree[present].unsqueeze(-1)
+        return out
+
+
 class SampleGraphClassifier(nn.Module):
     """Cell-gene HTG: typed GNN layers, then pool to one logit.
 
@@ -146,6 +208,9 @@ class SampleGraphClassifier(nn.Module):
         gat_heads: int = 4,
         dropout: float = 0.1,
         readout: Readout = "cell",
+        fi_embeddings: Tensor | None = None,
+        fi_mode: FIMode = "baseline",
+        fi_edge_dim: int = 12,
     ) -> None:
         super().__init__()
         if pooling not in ("mean", "attention"):
@@ -154,6 +219,10 @@ class SampleGraphClassifier(nn.Module):
             raise ValueError("encoder must be 'placeholder', 'sage', or 'gat'")
         if readout not in ("cell", "gene", "both"):
             raise ValueError("readout must be 'cell', 'gene', or 'both'")
+        if fi_mode not in ("baseline", "fi_topology", "fi_relation_aware"):
+            raise ValueError("fi_mode must be 'baseline', 'fi_topology', or 'fi_relation_aware'")
+        if fi_mode != "baseline" and encoder == "placeholder":
+            raise ValueError("FI gene edges require encoder 'sage' or 'gat'")
         self.pooling = pooling
         self.encoder = encoder
         self.readout = readout
@@ -179,12 +248,34 @@ class SampleGraphClassifier(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
+        if fi_embeddings is None:
+            self.fi_proj = None
+        else:
+            if fi_embeddings.ndim != 2 or fi_embeddings.shape[0] != num_genes:
+                raise ValueError("fi_embeddings must be one row per HTG gene")
+            self.register_buffer("fi_embeddings", fi_embeddings.detach().float())
+            self.fi_embeddings.requires_grad_(False)
+            self.fi_proj = nn.Linear(fi_embeddings.shape[1], hidden_dim, bias=False)
+        self.fi_mode = fi_mode
+        if fi_mode == "fi_topology":
+            self.fi_convs = nn.ModuleList(FITopologyConv(hidden_dim) for _ in range(num_layers))
+        elif fi_mode == "fi_relation_aware":
+            self.fi_convs = nn.ModuleList(
+                FIRelationConv(hidden_dim, fi_edge_dim) for _ in range(num_layers)
+            )
+        else:
+            self.fi_convs = None
 
     def encode(self, graph: HeteroData) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        gene_x = self.gene_emb(graph["gene"].global_id)
+        gene_ids = graph["gene"].global_id
+        gene_x = self.gene_emb(gene_ids)
+        if self.fi_proj is not None:
+            gene_x = gene_x + self.fi_proj(self.fi_embeddings[gene_ids])
         if self.htg is None:
             cell_x = self._placeholder_cells(graph, gene_x)
         else:
+            fi_index = graph[GENE_FI].edge_index if self.fi_convs is not None else None
+            fi_attr = getattr(graph[GENE_FI], "edge_attr", None) if fi_index is not None else None
             states = self.htg(
                 {"cell": self._cell_start(graph, gene_x), "gene": gene_x},
                 {
@@ -195,6 +286,9 @@ class SampleGraphClassifier(nn.Module):
                     GENE_TO_CELL: graph[GENE_TO_CELL].edge_weight,
                     CELL_TO_GENE: graph[CELL_TO_GENE].edge_weight,
                 },
+                fi_convs=self.fi_convs,
+                fi_edge_index=fi_index,
+                fi_edge_attr=fi_attr,
             )
             cell_x, gene_x = states["cell"], states["gene"]
         return (

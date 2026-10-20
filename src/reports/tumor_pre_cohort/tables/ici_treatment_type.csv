@@ -1,0 +1,4 @@
+ICI treatment type,n_datasets,n_samples,n_patients,n_cells
+Anti-pd-1,9,220,150,730577
+Anti-pd-l1,3,27,27,192906
+Anti-pd-1+aCTLA-4,2,10,10,26955

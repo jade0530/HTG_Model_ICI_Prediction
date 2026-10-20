@@ -1016,7 +1016,7 @@ def test_early_stopping_patience_and_best_checkpoint_reload(tmp_path, monkeypatc
     assert last["epoch"] == 6
     assert best["epoch"] == 1
     history_text = (tmp_path / "history.csv").read_text()
-    assert history_text.splitlines()[0] == "epoch,split,acc,auroc,auprc,f1,loss"
+    assert history_text.splitlines()[0] == "epoch,split,acc,balanced_acc,auroc,auprc,f1,loss"
     assert history_text.count(",train,") == 7
     assert history_text.count(",val,") == 7
 

@@ -8,13 +8,14 @@ import numpy as np
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    balanced_accuracy_score,
     confusion_matrix,
     f1_score,
     roc_auc_score,
     roc_curve,
 )
 
-METRIC_KEYS = ("acc", "auroc", "auprc", "f1", "loss")
+METRIC_KEYS = ("acc", "balanced_acc", "auroc", "auprc", "f1", "loss")
 ThresholdStrategy = Literal["max_f1", "youden", "fixed"]
 
 
@@ -24,13 +25,14 @@ def classification_metrics(
     *,
     threshold: float = 0.5,
 ) -> dict[str, float]:
-    """Return accuracy, AUROC, AUPRC, and F1 for binary labels ``{0, 1}``."""
+    """Return accuracy, AUROC, AUPRC, F1, and balanced accuracy for labels ``{0, 1}``."""
     y_true = np.asarray(y_true).reshape(-1)
     y_prob = np.asarray(y_prob, dtype=np.float64).reshape(-1)
     y_pred = (y_prob >= threshold).astype(np.int64)
     y_int = y_true.astype(np.int64)
     metrics: dict[str, float] = {
         "acc": float(accuracy_score(y_int, y_pred)),
+        "balanced_acc": float(balanced_accuracy_score(y_int, y_pred)),
         "f1": float(f1_score(y_int, y_pred, zero_division=0)),
     }
     if len(np.unique(y_int)) < 2:
@@ -98,6 +100,6 @@ def format_metrics(split: str, metrics: Mapping[str, float]) -> str:
         return "nan" if value != value else f"{float(value):.4f}"
 
     return (
-        f"{split}: acc={_fmt('acc')} auroc={_fmt('auroc')} auprc={_fmt('auprc')} "
-        f"f1={_fmt('f1')} loss={_fmt('loss')}"
+        f"{split}: acc={_fmt('acc')} balanced_acc={_fmt('balanced_acc')} "
+        f"auroc={_fmt('auroc')} auprc={_fmt('auprc')} f1={_fmt('f1')} loss={_fmt('loss')}"
     )

@@ -139,6 +139,21 @@ def test_sample_from_anndata_splits_annotation_and_clinical_columns():
     assert tuple(sample.hvg_names) == ("g1", "g2")
 
 
+def test_sample_from_anndata_can_keep_ensembl_ids():
+    adata = _AnnData({})
+    adata.var_names = ["ENSG00000000003", "ENSG00000000005"]
+    sample = sample_from_anndata(
+        adata,
+        sample_id="S1",
+        patient_id="P1",
+        label="R",
+        hvg_names=("ENSG00000000005",),
+        map_gene_symbols=False,
+    )
+    assert sample.gene_names == ("ENSG00000000003", "ENSG00000000005")
+    assert sample.hvg_names == ("ENSG00000000005",)
+
+
 def test_cell_type_proportional_sample_is_stratified_and_reproducible():
     labels = np.array(["T"] * 6 + ["B"] * 4)
     scores = np.linspace(0.1, 1.0, 10)

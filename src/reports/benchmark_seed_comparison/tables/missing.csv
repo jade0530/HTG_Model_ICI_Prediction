@@ -1,0 +1,16 @@
+architecture,cohort,split_seed,training_seed,status
+bioMESH,val,9485,42,balanced_acc not in saved file
+bioMESH,val,9485,43,balanced_acc not in saved file
+bioMESH,val,9485,44,balanced_acc not in saved file
+bioMESH,val,1043,42,balanced_acc not in saved file
+bioMESH,val,1043,43,balanced_acc not in saved file
+bioMESH,val,1043,44,balanced_acc not in saved file
+bioMESH,val,1045,42,balanced_acc not in saved file
+bioMESH,val,1045,43,balanced_acc not in saved file
+bioMESH,val,1045,44,balanced_acc not in saved file
+bioMESH,val,8173,42,balanced_acc not in saved file
+bioMESH,val,8173,43,balanced_acc not in saved file
+bioMESH,val,8173,44,balanced_acc not in saved file
+bioMESH,val,2873,42,balanced_acc not in saved file
+bioMESH,val,2873,43,balanced_acc not in saved file
+bioMESH,val,2873,44,balanced_acc not in saved file

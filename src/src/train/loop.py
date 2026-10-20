@@ -31,6 +31,14 @@ from src.train.dataset import (
     split_by_patient,
 )
 from src.train.metrics import ThresholdStrategy, classification_metrics, format_metrics, select_threshold
+from src.fi.message_graph import EDGE_ATTR_NAMES
+from src.fi.prior import GENE_PRIOR_MODES, align_fi_prior, resolve_fi_embedding_path
+from src.fi.sample_edges import (
+    DEFAULT_FI_GRAPH,
+    FI_GRAPH_MODES,
+    cached_sample_fi_edges,
+    format_fi_stats,
+)
 from src.train.model import EncoderKind, Pooling, Readout, SampleGraphClassifier
 from src.train.report import write_predictions, write_run_report
 
@@ -77,6 +85,10 @@ class TrainConfig:
     threshold: float = 0.5
     threshold_strategy: ThresholdStrategy = "max_f1"
     profile: bool = False
+    gene_prior: Literal["none", "fi_topology_frozen", "fi_semantic_frozen"] = "none"
+    fi_embedding_path: str = ""
+    fi_mode: Literal["baseline", "fi_topology", "fi_relation_aware"] = "baseline"
+    fi_graph_json: str = ""
     swa: bool = False
     swa_start: int | None = None
     swa_freq: int = 1
@@ -291,7 +303,19 @@ def config_from_dict(payload: dict) -> TrainConfig:
     return TrainConfig(**values)
 
 
-def build_classifier(num_genes: int, config: TrainConfig) -> SampleGraphClassifier:
+def build_classifier(
+    num_genes: int,
+    config: TrainConfig,
+    gene_names: Sequence[str] | None = None,
+) -> SampleGraphClassifier:
+    fi_embeddings = None
+    if config.gene_prior != "none":
+        if config.gene_prior not in GENE_PRIOR_MODES:
+            raise ValueError(f"gene_prior must be one of {GENE_PRIOR_MODES}")
+        if gene_names is None or len(gene_names) != num_genes:
+            raise ValueError("an FI prior needs one name per HTG gene")
+        path = resolve_fi_embedding_path(config.gene_prior, config.fi_embedding_path)
+        fi_embeddings, _coverage = align_fi_prior(gene_names, path)
     return SampleGraphClassifier(
         num_genes,
         hidden_dim=config.hidden_dim,
@@ -301,7 +325,19 @@ def build_classifier(num_genes: int, config: TrainConfig) -> SampleGraphClassifi
         num_layers=config.num_gnn_layers,
         gat_heads=config.gat_heads,
         dropout=config.dropout,
+        fi_embeddings=fi_embeddings,
+        fi_mode=config.fi_mode,
+        fi_edge_dim=len(EDGE_ATTR_NAMES),
     )
+
+
+def _fi_edges_for(config: TrainConfig, gene_universe: GeneUniverse):
+    if config.fi_mode == "baseline":
+        return None
+    if config.fi_mode not in FI_GRAPH_MODES:
+        raise ValueError(f"fi_mode must be one of {FI_GRAPH_MODES}")
+    path = Path(config.fi_graph_json) if config.fi_graph_json else DEFAULT_FI_GRAPH
+    return cached_sample_fi_edges(tuple(gene_universe.names), mode=config.fi_mode, graph_json=path)
 
 
 def _loader(
@@ -311,6 +347,7 @@ def _loader(
     gene_universe: GeneUniverse,
     config: TrainConfig,
     training: bool,
+    map_gene_symbols: bool = True,
 ) -> DataLoader:
     dataset = SampleGraphDataset(
         items,
@@ -325,8 +362,12 @@ def _loader(
         n_hvg=config.n_hvg,
         hvg_names=config.hvg_names or None,
         cache_samples=config.cache_samples,
+        fi_edges=_fi_edges_for(config, gene_universe),
+        map_gene_symbols=map_gene_symbols,
     )
-    return DataLoader(dataset, batch_size=config.batch_size, shuffle=training)
+    generator = torch.Generator()
+    generator.manual_seed(config.training_seed)
+    return DataLoader(dataset, batch_size=config.batch_size, shuffle=training, generator=generator)
 
 
 def _item_label(item: SampleData | SampleRecord) -> str:
@@ -361,13 +402,16 @@ def _append_history(path: Path, result: EpochResult) -> None:
     with path.open("a", newline="") as handle:
         writer = csv.writer(handle)
         if new_file:
-            writer.writerow(["epoch", "split", "acc", "auroc", "auprc", "f1", "loss"])
+            writer.writerow(
+                ["epoch", "split", "acc", "balanced_acc", "auroc", "auprc", "f1", "loss"]
+            )
         for split, metrics in (("train", result.train), ("val", result.val)):
             writer.writerow(
                 [
                     result.epoch,
                     split,
                     metrics["acc"],
+                    metrics.get("balanced_acc", float("nan")),
                     metrics.get("auroc", float("nan")),
                     metrics["auprc"],
                     metrics["f1"],
@@ -449,6 +493,31 @@ def train(
         else:
             gene_universe = build_gene_universe(train_items)
 
+    if config.fi_mode != "baseline":
+        fi_path = Path(config.fi_graph_json) if config.fi_graph_json else DEFAULT_FI_GRAPH
+        config.fi_graph_json = str(fi_path)
+        fi_prepared = cached_sample_fi_edges(
+            tuple(gene_universe.names), mode=config.fi_mode, graph_json=fi_path
+        )
+        if log:
+            print(format_fi_stats(fi_prepared.stats))
+    else:
+        fi_prepared = None
+
+    if config.gene_prior != "none":
+        path = resolve_fi_embedding_path(config.gene_prior, config.fi_embedding_path)
+        config.fi_embedding_path = str(path)
+        _fi_table, coverage = align_fi_prior(gene_universe.names, path)
+        if log:
+            print(
+                f"fi_prior={config.gene_prior} htg_genes={coverage['n_htg_genes']} "
+                f"fi_genes={coverage['n_fi_genes']} overlap={coverage['overlap']} "
+                f"with_fi={coverage['n_with_fi']} without_fi={coverage['n_without_fi']} "
+                f"coverage={float(coverage['coverage']):.4f}"
+            )
+    else:
+        coverage = None
+
     out: Path | None = None
     if output_dir is not None:
         out = Path(output_dir)
@@ -463,6 +532,10 @@ def train(
             },
         )
         (out / "gene_universe.txt").write_text("\n".join(gene_universe.names) + "\n")
+        if coverage is not None:
+            _write_json(out / "fi_gene_coverage.json", coverage)
+        if fi_prepared is not None:
+            _write_json(out / "fi_graph_stats.json", fi_prepared.stats)
 
     sampler = CellSampler(num_cells=config.num_cells, seed=config.training_seed)
     train_loader = _loader(
@@ -471,11 +544,21 @@ def train(
     val_loader = _loader(
         val_items, sampler=sampler, gene_universe=gene_universe, config=config, training=False
     )
-    model = build_classifier(len(gene_universe), config).to(device)
+    model = build_classifier(len(gene_universe), config, gene_universe.names).to(device)
+    if config.gene_prior != "none":
+        if model.fi_proj is None or model.fi_embeddings.requires_grad:
+            raise RuntimeError("FI embeddings must stay frozen")
+        if not model.fi_proj.weight.requires_grad:
+            raise RuntimeError("FI projection must be trainable")
+        if any(name == "fi_embeddings" for name, _param in model.named_parameters()):
+            raise RuntimeError("FI embeddings were registered as parameters")
     if config.optimizer == "adamw":
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=0.01)
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=0.0)
+    # FI layers are created after the shared classifier, so their initialization
+    # must not change dropout or later torch noise shared by every mode.
+    seed_everything(config.training_seed)
     swa_model: AveragedModel | None = None
     swa_scheduler: SWALR | None = None
     swa_start = resolve_swa_start(config.epochs, config.swa_start)
@@ -976,7 +1059,7 @@ def load_checkpoint(path: str | Path, *, device: str | None = None) -> SavedRun:
     threshold = float(payload["threshold"]) if "threshold" in payload else float(config.threshold)
     config.threshold = threshold
     resolved = resolve_device(device or config.device)
-    model = build_classifier(len(gene_universe), config)
+    model = build_classifier(len(gene_universe), config, gene_universe.names)
     model.load_state_dict(payload["model"])
     model.to(resolved)
     model.eval()
@@ -997,6 +1080,7 @@ def predict(
     output_dir: str | Path | None = None,
     device: str | None = None,
     log: bool = True,
+    map_gene_symbols: bool = True,
 ) -> dict[str, object]:
     """Score new samples with a saved run. Graphs are rebuilt, weights are not.
 
@@ -1016,6 +1100,7 @@ def predict(
         gene_universe=saved.gene_universe,
         config=config,
         training=False,
+        map_gene_symbols=map_gene_symbols,
     )
     y_true, y_prob = collect_predictions(saved.model, loader, device=resolved)
     y_pred = (y_prob >= saved.threshold).astype(np.int64)

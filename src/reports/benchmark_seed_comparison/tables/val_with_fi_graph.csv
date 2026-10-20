@@ -1,0 +1,37 @@
+architecture,cohort,metric,n,mean,sample_sd,variance
+bioMESH,val,acc,15,0.712370,0.049812,0.002481
+bioMESH,val,auroc,15,0.748675,0.026347,0.000694
+bioMESH,val,auprc,15,0.781526,0.027840,0.000775
+bioMESH,val,f1,15,0.756885,0.025098,0.000630
+Random forest,val,acc,15,0.704406,0.029061,0.000845
+Random forest,val,auroc,15,0.750374,0.025352,0.000643
+Random forest,val,auprc,15,0.794236,0.035714,0.001276
+Random forest,val,f1,15,0.747521,0.030059,0.000904
+Linear regression,val,acc,15,0.665208,0.070047,0.004907
+Linear regression,val,auroc,15,0.677996,0.095576,0.009135
+Linear regression,val,auprc,15,0.690952,0.088957,0.007913
+Linear regression,val,f1,15,0.725141,0.025033,0.000627
+MLP,val,acc,15,0.629040,0.055826,0.003117
+MLP,val,auroc,15,0.673099,0.040239,0.001619
+MLP,val,auprc,15,0.726514,0.044916,0.002017
+MLP,val,f1,15,0.712931,0.025988,0.000675
+GNN,val,acc,15,0.627207,0.067031,0.004493
+GNN,val,auroc,15,0.695099,0.030426,0.000926
+GNN,val,auprc,15,0.733150,0.059454,0.003535
+GNN,val,f1,15,0.721109,0.039556,0.001565
+FI topology,val,acc,6,0.723554,0.021227,0.000451
+FI topology,val,auroc,6,0.754845,0.019146,0.000367
+FI topology,val,auprc,6,0.771519,0.049935,0.002493
+FI topology,val,f1,6,0.777128,0.007890,0.000062
+FI relation,val,acc,6,0.717758,0.037190,0.001383
+FI relation,val,auroc,6,0.750612,0.029510,0.000871
+FI relation,val,auprc,6,0.774688,0.051251,0.002627
+FI relation,val,f1,6,0.769800,0.015687,0.000246
+Encoder topology,val,acc,1,0.728814,,
+Encoder topology,val,auroc,1,0.744213,,
+Encoder topology,val,auprc,1,0.790950,,
+Encoder topology,val,f1,1,0.789474,,
+Encoder semantics,val,acc,1,0.745763,,
+Encoder semantics,val,auroc,1,0.752315,,
+Encoder semantics,val,auprc,1,0.788138,,
+Encoder semantics,val,f1,1,0.800000,,

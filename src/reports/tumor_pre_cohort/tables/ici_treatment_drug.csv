@@ -1,0 +1,13 @@
+ICI treatment drug,n_datasets,n_samples,n_patients,n_cells
+Pembrolizumab,5,139,70,464109
+Durvalumab,1,20,20,166611
+pembrolizumab,1,40,40,96158
+toripalimab,1,10,10,79535
+Sintilimab,1,8,8,37811
+Unknown,1,14,14,35850
+atezolizumab,1,5,5,17672
+Nivolumab+Ipilimumab,1,7,7,15444
+Ipilimumab,1,3,3,11511
+Nivolumab,2,8,7,9030
+Avelumab,1,2,2,8623
+Camrelizumab,1,1,1,8084
