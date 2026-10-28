@@ -22,6 +22,7 @@ from src.data.sampler import CellSampler
 from src.graph.build_local_graph import GeneStrategy, GeneUniverse, per_sample_graph_stats
 from src.train.dataset import (
     CellTypeLevel,
+    GraphFolderDataset,
     SamplingMode,
     SampleRecord,
     SampleGraphDataset,
@@ -81,6 +82,7 @@ class TrainConfig:
     swa_start: int | None = None
     swa_freq: int = 1
     swa_lr: float | None = None
+    graph_dir: str = ""
 
 
 @dataclass
@@ -312,6 +314,11 @@ def _loader(
     config: TrainConfig,
     training: bool,
 ) -> DataLoader:
+    if config.graph_dir:
+        dataset = GraphFolderDataset(config.graph_dir, [str(item.sample_id) for item in items])
+        generator = torch.Generator()
+        generator.manual_seed(config.training_seed)
+        return DataLoader(dataset, batch_size=config.batch_size, shuffle=training, generator=generator)
     dataset = SampleGraphDataset(
         items,
         sampler=sampler,
@@ -326,7 +333,9 @@ def _loader(
         hvg_names=config.hvg_names or None,
         cache_samples=config.cache_samples,
     )
-    return DataLoader(dataset, batch_size=config.batch_size, shuffle=training)
+    generator = torch.Generator()
+    generator.manual_seed(config.training_seed)
+    return DataLoader(dataset, batch_size=config.batch_size, shuffle=training, generator=generator)
 
 
 def _item_label(item: SampleData | SampleRecord) -> str:
@@ -441,13 +450,21 @@ def train(
         )
         test_items = []
 
-    if config.gene_strategy == "hvg" and not config.hvg_names:
-        config.hvg_names = select_train_hvgs(train_items, n_hvg=config.n_hvg)
-    if gene_universe is None:
-        if config.gene_strategy == "hvg" and config.hvg_names:
-            gene_universe = GeneUniverse(config.hvg_names)
-        else:
-            gene_universe = build_gene_universe(train_items)
+    if config.graph_dir and gene_universe is None:
+        names = [
+            line.strip()
+            for line in (Path(config.graph_dir) / "gene_universe.txt").read_text().splitlines()
+            if line.strip()
+        ]
+        gene_universe = GeneUniverse(names)
+    else:
+        if config.gene_strategy == "hvg" and not config.hvg_names:
+            config.hvg_names = select_train_hvgs(train_items, n_hvg=config.n_hvg)
+        if gene_universe is None:
+            if config.gene_strategy == "hvg" and config.hvg_names:
+                gene_universe = GeneUniverse(config.hvg_names)
+            else:
+                gene_universe = build_gene_universe(train_items)
 
     out: Path | None = None
     if output_dir is not None:
@@ -476,6 +493,9 @@ def train(
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=0.01)
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=0.0)
+    # Weight initialization consumes the global generator. Rewind it so later
+    # noise starts again at training_seed.
+    seed_everything(config.training_seed)
     swa_model: AveragedModel | None = None
     swa_scheduler: SWALR | None = None
     swa_start = resolve_swa_start(config.epochs, config.swa_start)

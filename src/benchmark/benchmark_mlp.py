@@ -57,6 +57,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     add_data_args(parser)
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--params-json", type=Path, default=None)
+    parser.add_argument("--search-grid", choices=("legacy", "table"), default="legacy")
+    parser.add_argument(
+        "--search-only",
+        action="store_true",
+        help="Write the hyperparameter table and skip the winning refit",
+    )
     return parser.parse_args(argv)
 
 
@@ -96,17 +102,41 @@ def run_epochs(model: MLPClassifier, X_train, y_train, X_val, y_val, epochs: int
     return history
 
 
-def tune(X_train, y_train, X_val, y_val, epochs: int, seed: int) -> tuple[dict, list[dict]]:
+def legacy_configs() -> list[dict]:
+    return [
+        {
+            "hidden_layer_sizes": hidden,
+            "alpha": alpha,
+            "learning_rate_init": learning_rate,
+            "activation": activation,
+        }
+        for hidden, alpha, learning_rate, activation in product(
+            HIDDEN_LAYERS, ALPHAS, LEARNING_RATES, ACTIVATIONS
+        )
+    ]
+
+
+def search_configs(search_grid: str) -> list[dict]:
+    if search_grid == "legacy":
+        return legacy_configs()
+    if search_grid == "table":
+        from benchmark.table_grids import mlp_grid
+
+        return mlp_grid()
+    raise ValueError(search_grid)
+
+
+def tune(
+    X_train, y_train, X_val, y_val, epochs: int, seed: int, search_grid: str = "legacy"
+) -> tuple[dict, list[dict]]:
     rows = []
     best_params = None
     best_auprc = -1.0
-    for hidden, alpha, lr, activation in product(HIDDEN_LAYERS, ALPHAS, LEARNING_RATES, ACTIVATIONS):
-        params = {
-            "hidden_layer_sizes": hidden,
-            "alpha": alpha,
-            "learning_rate_init": lr,
-            "activation": activation,
-        }
+    for params in search_configs(search_grid):
+        hidden = params["hidden_layer_sizes"]
+        alpha = params["alpha"]
+        lr = params["learning_rate_init"]
+        activation = params["activation"]
         model = make_model(params, seed)
         history = run_epochs(model, X_train, y_train, X_val, y_val, epochs, seed)
         metrics = history[-1].val
@@ -154,14 +184,22 @@ def main_train(argv: list[str] | None = None) -> None:
     X_test = scaler.transform(test.X) if test is not None else None
     print(f"features={len(genes)} matrix={X_train.shape}")
 
+    if args.search_only and args.params_json is not None:
+        raise SystemExit("--search-only does not take --params-json")
     if args.params_json is None:
         best_params, search_rows = tune(
-            X_train, train.y, X_val, val.y, args.epochs, args.seed
+            X_train, train.y, X_val, val.y, args.epochs, args.seed, search_grid=args.search_grid
         )
     else:
         best_params = json.loads(args.params_json.read_text())
         best_params["hidden_layer_sizes"] = tuple(best_params["hidden_layer_sizes"])
         search_rows = []
+    if args.search_only:
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        write_search_csv(out / "hyperparam_search.csv", search_rows)
+        print(f"search_only configs={len(search_rows)} output_dir={out}")
+        return
     print(f"best_params={best_params}")
     model = make_model(best_params, args.seed)
     history = run_epochs(model, X_train, train.y, X_val, val.y, args.epochs, args.seed)

@@ -55,6 +55,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Random-forest baseline on raw sample h5ads")
     add_data_args(parser)
     parser.add_argument("--params-json", type=Path, default=None)
+    parser.add_argument("--search-grid", choices=("legacy", "table"), default="legacy")
+    parser.add_argument(
+        "--search-only",
+        action="store_true",
+        help="Write the hyperparameter table and skip the winning refit",
+    )
     parser.add_argument(
         "--tree-step",
         type=int,
@@ -73,30 +79,43 @@ def fold_metrics(model: RandomForestClassifier, X: np.ndarray, y: np.ndarray, th
     return score_metrics(y, scores, threshold=threshold, loss=log_loss(y, scores, labels=[0, 1]))
 
 
-def tune(X_train, y_train, X_val, y_val, seed: int) -> tuple[dict, list[dict]]:
-    rows = []
-    best_params = None
-    best_auprc = -1.0
-    for n_estimators, max_depth, min_samples_leaf, max_features, class_weight in product(
-        N_ESTIMATORS, MAX_DEPTH, MIN_SAMPLES_LEAF, MAX_FEATURES, CLASS_WEIGHT
-    ):
-        params = {
+def legacy_configs() -> list[dict]:
+    return [
+        {
             "n_estimators": n_estimators,
             "max_depth": max_depth,
             "min_samples_leaf": min_samples_leaf,
             "max_features": max_features,
             "class_weight": class_weight,
         }
+        for n_estimators, max_depth, min_samples_leaf, max_features, class_weight in product(
+            N_ESTIMATORS, MAX_DEPTH, MIN_SAMPLES_LEAF, MAX_FEATURES, CLASS_WEIGHT
+        )
+    ]
+
+
+def search_configs(search_grid: str) -> list[dict]:
+    if search_grid == "legacy":
+        return legacy_configs()
+    if search_grid == "table":
+        from benchmark.table_grids import random_forest_grid
+
+        return random_forest_grid()
+    raise ValueError(search_grid)
+
+
+def tune(X_train, y_train, X_val, y_val, seed: int, search_grid: str = "legacy") -> tuple[dict, list[dict]]:
+    rows = []
+    best_params = None
+    best_auprc = -1.0
+    for params in search_configs(search_grid):
         model = RandomForestClassifier(random_state=seed, n_jobs=-1, **params)
         model.fit(X_train, y_train)
         metrics = fold_metrics(model, X_val, y_val, threshold=0.5)
         row = {**params, **{f"val_{key}": value for key, value in metrics.items()}}
         rows.append(row)
-        print(
-            f"rf n_estimators={n_estimators} max_depth={max_depth} "
-            f"min_samples_leaf={min_samples_leaf} max_features={max_features} "
-            f"class_weight={class_weight} val_auprc={metrics['auprc']:.4f}"
-        )
+        joined = " ".join(f"{key}={value}" for key, value in params.items())
+        print(f"rf {joined} val_auprc={metrics['auprc']:.4f}")
         if metrics["auprc"] > best_auprc:
             best_auprc = metrics["auprc"]
             best_params = params
@@ -149,11 +168,21 @@ def main_train(argv: list[str] | None = None) -> None:
     test = build_fold(folds["test"], genes) if folds["test"] else None
     print(f"features={len(genes)} matrix={train.X.shape}")
 
+    if args.search_only and args.params_json is not None:
+        raise SystemExit("--search-only does not take --params-json")
     if args.params_json is None:
-        best_params, search_rows = tune(train.X, train.y, val.X, val.y, args.seed)
+        best_params, search_rows = tune(
+            train.X, train.y, val.X, val.y, args.seed, search_grid=args.search_grid
+        )
     else:
         best_params = json.loads(args.params_json.read_text())
         search_rows = []
+    if args.search_only:
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        write_search_csv(out / "hyperparam_search.csv", search_rows)
+        print(f"search_only configs={len(search_rows)} output_dir={out}")
+        return
     print(f"best_params={best_params}")
     model, history = fit_history(best_params, train.X, train.y, val.X, val.y, args.seed, args.tree_step)
 

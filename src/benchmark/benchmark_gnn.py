@@ -109,6 +109,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--params-json", type=Path, default=None)
+    parser.add_argument("--search-grid", choices=("legacy", "table"), default="legacy")
+    parser.add_argument(
+        "--search-only",
+        action="store_true",
+        help="Write the hyperparameter table and skip the winning refit",
+    )
     return parser.parse_args(argv)
 
 
@@ -202,8 +208,10 @@ def predict_scores(model, loader, device) -> np.ndarray:
     return torch.sigmoid(torch.cat(logits)).numpy()
 
 
-def run_epochs(model, train_loader, val_loader, *, device, epochs, lr, weight) -> list[EpochResult]:
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+def run_epochs(
+    model, train_loader, val_loader, *, device, epochs, lr, weight, weight_decay: float = 0.0
+) -> list[EpochResult]:
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     history: list[EpochResult] = []
     for epoch in range(epochs):
         history.append(
@@ -216,13 +224,9 @@ def run_epochs(model, train_loader, val_loader, *, device, epochs, lr, weight) -
     return history
 
 
-def tune(train_cells, y_train, val_cells, y_val, *, in_dim, epochs, batch_size, device, seed) -> tuple[dict, list[dict]]:
-    weight = pos_weight(y_train).to(device)
-    rows = []
-    best_params = None
-    best_auprc = -1.0
-    for k, hidden_dim, num_layers, dropout in product(K_VALUES, HIDDEN_DIMS, NUM_LAYERS, DROPOUTS):
-        params = {
+def legacy_configs() -> list[dict]:
+    return [
+        {
             "k": k,
             "hidden_dim": hidden_dim,
             "num_layers": num_layers,
@@ -231,19 +235,63 @@ def tune(train_cells, y_train, val_cells, y_val, *, in_dim, epochs, batch_size, 
             "pooling": "mean",
             "lr": 1e-3,
         }
+        for k, hidden_dim, num_layers, dropout in product(K_VALUES, HIDDEN_DIMS, NUM_LAYERS, DROPOUTS)
+    ]
+
+
+def search_configs(search_grid: str) -> list[dict]:
+    if search_grid == "legacy":
+        return legacy_configs()
+    if search_grid == "table":
+        from benchmark.table_grids import gnn_grid
+
+        return gnn_grid()
+    raise ValueError(search_grid)
+
+
+def tune(
+    train_cells,
+    y_train,
+    val_cells,
+    y_val,
+    *,
+    in_dim,
+    epochs,
+    batch_size,
+    device,
+    seed,
+    search_grid: str = "legacy",
+) -> tuple[dict, list[dict]]:
+    weight = pos_weight(y_train).to(device)
+    rows = []
+    best_params = None
+    best_auprc = -1.0
+    for params in search_configs(search_grid):
+        k = params["k"]
+        hidden_dim = params["hidden_dim"]
+        num_layers = params["num_layers"]
+        dropout = params["dropout"]
         seed_everything(seed)
         train_loader = make_loader(train_cells, y_train, k, batch_size, shuffle=True)
         val_loader = make_loader(val_cells, y_val, k, batch_size, shuffle=False)
         model = make_model(in_dim, params).to(device)
         history = run_epochs(
-            model, train_loader, val_loader, device=device, epochs=epochs, lr=params["lr"], weight=weight
+            model,
+            train_loader,
+            val_loader,
+            device=device,
+            epochs=epochs,
+            lr=params["lr"],
+            weight=weight,
+            weight_decay=float(params.get("weight_decay", 0.0)),
         )
         metrics = history[-1].val
         row = {**params, **{f"val_{key}": value for key, value in metrics.items()}}
         rows.append(row)
         print(
-            f"gnn k={k} hidden={hidden_dim} layers={num_layers} "
-            f"dropout={dropout} val_auprc={metrics['auprc']:.4f}"
+            f"gnn k={k} hidden={hidden_dim} layers={num_layers} dropout={dropout} "
+            f"lr={params['lr']} weight_decay={params.get('weight_decay', 0.0)} "
+            f"val_auprc={metrics['auprc']:.4f}"
         )
         if metrics["auprc"] > best_auprc:
             best_auprc = metrics["auprc"]
@@ -286,6 +334,8 @@ def main_train(argv: list[str] | None = None) -> None:
         test_cells = scale_cells(test_cells, scaler)
     print(f"features={len(genes)} cells={args.num_cells}")
 
+    if args.search_only and args.params_json is not None:
+        raise SystemExit("--search-only does not take --params-json")
     if args.params_json is None:
         best_params, search_rows = tune(
             train_cells,
@@ -297,10 +347,17 @@ def main_train(argv: list[str] | None = None) -> None:
             batch_size=args.batch_size,
             device=device,
             seed=args.seed,
+            search_grid=args.search_grid,
         )
     else:
         best_params = json.loads(args.params_json.read_text())
         search_rows = []
+    if args.search_only:
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        write_search_csv(out / "hyperparam_search.csv", search_rows)
+        print(f"search_only configs={len(search_rows)} output_dir={out}")
+        return
     print(f"best_params={best_params}")
     seed_everything(args.seed)
     train_loader = make_loader(train_cells, y_train, best_params["k"], args.batch_size, shuffle=True)
@@ -314,6 +371,7 @@ def main_train(argv: list[str] | None = None) -> None:
         epochs=args.epochs,
         lr=best_params["lr"],
         weight=pos_weight(y_train).to(device),
+        weight_decay=float(best_params.get("weight_decay", 0.0)),
     )
     for row in history:
         print(f"epoch {row.epoch} {format_metrics('train', row.train)}")

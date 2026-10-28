@@ -188,15 +188,51 @@ def select_sample_hvgs(adata: object, *, n_hvg: int = DEFAULT_N_HVG) -> tuple[st
     return _hvgs_from_var(adata, n_hvg)
 
 
+def read_h5ad_sample(
+    path: str | Path,
+    *,
+    sample_id: str | None = None,
+    obs_key: str | None = None,
+    backed: bool = False,
+):
+    """Read one h5ad, or the cells of one sample inside an integrated h5ad.
+
+    ``obs_key`` selects ``obs[obs_key] == sample_id``. Without it, the file is
+    one sample and ``backed`` is passed through to ``read_h5ad``.
+    """
+    import anndata as ad
+
+    path = Path(path)
+    if not obs_key:
+        return ad.read_h5ad(path, backed="r" if backed else None)
+    adata = ad.read_h5ad(path, backed="r")
+    try:
+        if obs_key not in adata.obs.columns:
+            raise ValueError(f"{path} has no obs column {obs_key!r}")
+        mask = np.asarray(adata.obs[obs_key].astype(str)) == str(sample_id)
+        indices = np.flatnonzero(mask)
+        if len(indices) == 0:
+            raise ValueError(f"sample {sample_id!r} is not in {path}")
+        subset = adata[indices]
+        if getattr(subset, "isbacked", False):
+            subset = subset.to_memory()
+        return subset
+    finally:
+        if getattr(adata, "isbacked", False) and adata.file is not None:
+            adata.file.close()
+
+
 def _item_expression_and_genes(item: object) -> tuple[ExpressionMatrix, tuple[str, ...]]:
     if isinstance(item, AnnDataSample):
         return apply_expression(item.X, tuple(str(name) for name in item.gene_names))
     h5ad_path = getattr(item, "h5ad_path", None)
     if h5ad_path is None:
         return apply_expression(item.X, tuple(str(name) for name in item.gene_names))
-    import anndata as ad
-
-    adata = ad.read_h5ad(h5ad_path)
+    adata = read_h5ad_sample(
+        h5ad_path,
+        sample_id=getattr(item, "sample_id", None),
+        obs_key=getattr(item, "obs_key", None),
+    )
     return apply_expression(adata.X, tuple(str(name) for name in adata.var_names))
 
 
@@ -285,6 +321,7 @@ def sample_from_anndata(
     target_hg38_gff: str | Path | None = None,
     n_hvg: int = DEFAULT_N_HVG,
     hvg_names: Sequence[str] | None = None,
+    map_gene_symbols: bool = True,
 ) -> AnnDataSample:
     """Build the sample contract from a sample-filtered AnnData object.
 
@@ -301,9 +338,10 @@ def sample_from_anndata(
             hg19_gtf=hg19_gtf,
             target_hg38_gff=target_hg38_gff,
         )
-    adata = map_adata_gene_symbols(adata)
+    if map_gene_symbols:
+        adata = map_adata_gene_symbols(adata)
     gene_names = tuple(str(name) for name in adata.var_names)
-    if hvg_names is not None:
+    if hvg_names is not None and map_gene_symbols:
         hvg_names = map_gene_names(hvg_names)
     annotation_keys = CELL_ANNOTATION_KEYS + MAIN_CELL_TYPE_KEYS
     cell_annotation = _copy_obs(adata, annotation_keys) if load_cell_annotation else {}

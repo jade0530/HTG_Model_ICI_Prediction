@@ -1,8 +1,11 @@
 from .dataset import (
+    GraphFolderDataset,
     SampleGraphDataset,
     SampleRecord,
+    SavedGraph,
     assert_patient_disjoint,
     collect_records,
+    load_graph_index,
     load_sample_manifest,
     split_by_patient,
 )
@@ -28,8 +31,11 @@ __all__ = [
     "Readout",
     "SavedRun",
     "SampleGraphClassifier",
+    "GraphFolderDataset",
     "SampleGraphDataset",
     "SampleRecord",
+    "SavedGraph",
+    "load_graph_index",
     "TrainConfig",
     "TrainResult",
     "assert_patient_disjoint",

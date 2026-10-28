@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from src.data.sampler import SAMPLING_MODES
-from src.train.dataset import DEFAULT_MANIFEST, REPO_ROOT, collect_records
+from src.train.dataset import DEFAULT_MANIFEST, REPO_ROOT, collect_records, load_graph_index
 from src.train.loop import TrainConfig, predict, train
 
 
@@ -17,7 +17,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dataset-root",
         type=Path,
         default=REPO_ROOT / "data" / "test",
-        help="Folder of sample h5ads, or the root that sample_manifest.csv paths are relative to",
+        help="Folder of sample h5ads, a manifest root, or one integrated h5ad with sample_id in obs",
+    )
+    parser.add_argument(
+        "--graph-dir",
+        type=Path,
+        default=None,
+        help="Saved graph folder with index.json and gene_universe.txt. Skips building graphs from h5ad",
     )
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "outputs" / "train")
@@ -150,7 +156,7 @@ def parse_predict_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dataset-root",
         type=Path,
         required=True,
-        help="Folder of new sample h5ads, or a dataset root for the manifest",
+        help="Folder of new sample h5ads, a manifest root, or one integrated h5ad with sample_id in obs",
     )
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "outputs" / "predict")
@@ -167,13 +173,17 @@ def parse_predict_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main_train(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    records = collect_records(
-        args.dataset_root,
-        args.manifest,
-        tissue=None if args.tissue.lower() == "all" else args.tissue,
-        ici_phase=None if args.ici_phase.lower() == "all" else args.ici_phase,
-    )
-    print(f"samples={len(records)} dataset_root={args.dataset_root}")
+    if args.graph_dir is None:
+        records = collect_records(
+            args.dataset_root,
+            args.manifest,
+            tissue=None if args.tissue.lower() == "all" else args.tissue,
+            ici_phase=None if args.ici_phase.lower() == "all" else args.ici_phase,
+        )
+        print(f"samples={len(records)} dataset_root={args.dataset_root}")
+    else:
+        records = load_graph_index(args.graph_dir)
+        print(f"samples={len(records)} graph_dir={args.graph_dir}")
     result = train(
         records,
         config=TrainConfig(
@@ -212,6 +222,7 @@ def main_train(argv: list[str] | None = None) -> None:
             swa_start=args.swa_start,
             swa_freq=args.swa_freq,
             swa_lr=args.swa_lr,
+            graph_dir="" if args.graph_dir is None else str(args.graph_dir),
         ),
         output_dir=args.output_dir,
     )

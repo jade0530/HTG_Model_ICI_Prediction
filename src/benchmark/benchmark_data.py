@@ -16,7 +16,6 @@ from typing import Mapping, Sequence
 import numpy as np
 from scipy import sparse
 
-from src.data.data_loader import select_train_hvgs
 from src.train.dataset import SampleRecord, collect_records
 from src.train.loop import EpochResult
 from src.train.metrics import classification_metrics
@@ -75,6 +74,39 @@ def assign_split(
     return {"train": train, "val": val, "test": test}
 
 
+def _read_record(record: SampleRecord):
+    from src.data.data_loader import read_h5ad_sample
+
+    return read_h5ad_sample(record.h5ad_path, sample_id=record.sample_id, obs_key=record.obs_key)
+
+
+def _raw_expression_and_genes(record: SampleRecord):
+    """Cell-by-gene matrix and the h5ad gene IDs, without symbol renaming."""
+    adata = _read_record(record)
+    return adata.X, tuple(str(name) for name in adata.var_names)
+
+
+def select_benchmark_hvgs(records: Sequence[SampleRecord], *, n_hvg: int) -> tuple[str, ...]:
+    """HVGs on the raw gene IDs used by the benchmark feature matrices."""
+    import anndata as ad
+
+    from src.data.data_loader import _union_hvgs, _vstack_expression, select_sample_hvgs
+
+    payloads = [_raw_expression_and_genes(record) for record in records]
+    names_list = [names for _, names in payloads]
+    first = names_list[0]
+    if all(names == first for names in names_list[1:]):
+        adata = ad.AnnData(_vstack_expression([matrix for matrix, _ in payloads]))
+        adata.var_names = list(first)
+        return select_sample_hvgs(adata, n_hvg=n_hvg)
+    per_sample = []
+    for matrix, names in payloads:
+        adata = ad.AnnData(matrix)
+        adata.var_names = list(names)
+        per_sample.append(select_sample_hvgs(adata, n_hvg=n_hvg))
+    return _union_hvgs(per_sample, n_hvg)
+
+
 def resolve_genes(
     train_records: Sequence[SampleRecord],
     *,
@@ -83,7 +115,9 @@ def resolve_genes(
 ) -> tuple[str, ...]:
     if gene_universe is not None:
         return tuple(line.strip() for line in Path(gene_universe).read_text().splitlines() if line.strip())
-    return select_train_hvgs(train_records, n_hvg=n_hvg)
+    genes = select_benchmark_hvgs(train_records, n_hvg=n_hvg)
+    print(f"hvg={len(genes)} first={genes[0]}")
+    return genes
 
 
 def align_mean_vector(mean: np.ndarray, var_names: Sequence[str], gene_names: Sequence[str]) -> np.ndarray:
@@ -99,9 +133,7 @@ def align_mean_vector(mean: np.ndarray, var_names: Sequence[str], gene_names: Se
 
 def mean_expression(record: SampleRecord, gene_names: Sequence[str]) -> np.ndarray:
     """One sample = mean of raw ``X`` over cells, aligned to ``gene_names``."""
-    import anndata as ad
-
-    adata = ad.read_h5ad(record.h5ad_path)
+    adata = _read_record(record)
     if sparse.issparse(adata.X):
         mean = np.asarray(adata.X.mean(axis=0)).ravel()
     else:
@@ -143,11 +175,9 @@ def load_cell_features(
     view_index: int,
 ) -> np.ndarray:
     """Aligned cell x gene matrix, then a fixed subsample of ``num_cells``."""
-    import anndata as ad
-
     from src.data.sampler import CellSampler
 
-    adata = ad.read_h5ad(record.h5ad_path)
+    adata = _read_record(record)
     cells = align_cell_matrix(adata.X, [str(name) for name in adata.var_names], gene_names)
     idx = CellSampler(num_cells=num_cells, seed=seed).sample(
         cells.shape[0], training=False, view_index=view_index

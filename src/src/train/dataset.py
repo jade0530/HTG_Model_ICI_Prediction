@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -19,6 +20,7 @@ from src.data.data_loader import (
     MAIN_CELL_TYPE_KEYS,
     AnnDataSample,
     SampleData,
+    read_h5ad_sample,
     sample_from_anndata,
 )
 from src.data.sampler import SAMPLING_MODES, CellSampler, select_cells
@@ -53,6 +55,7 @@ class SampleRecord:
     ici_phase: str
     cancer_type: str
     output_file: str
+    obs_key: str | None = None
 
     @property
     def patient_key(self) -> str:
@@ -201,6 +204,81 @@ def records_from_h5ad_dir(
     return records
 
 
+def _obs_value(rows: object, column: str) -> str:
+    if column not in rows.columns:
+        return ""
+    values = [str(value) for value in rows[column].astype(str).unique().tolist()]
+    if len(values) != 1:
+        sample = str(rows["sample_id"].iloc[0]) if "sample_id" in rows.columns else "?"
+        raise ValueError(f"sample {sample} has multiple {column!r} values: {values[:5]}")
+    return values[0]
+
+
+def records_from_integrated_h5ad(
+    path: str | Path,
+    *,
+    tissue: str | None = "Tumor",
+    ici_phase: str | None = "pre",
+    require_label: bool = True,
+) -> list[SampleRecord]:
+    """One record per ``obs['sample_id']`` in a concatenated h5ad.
+
+    Identity fields use the same columns as the per-sample metadata:
+    ``patient_id``, ``dataset_id``, ``Response``, ``Tissue``, ``ICI_phase``,
+    and ``Cancer type``. Tissue and phase filters apply only when those
+    columns are present.
+    """
+    import anndata as ad
+
+    source = Path(path)
+    adata = ad.read_h5ad(source, backed="r")
+    try:
+        obs = adata.obs
+        if "sample_id" not in obs.columns:
+            raise ValueError(f"{source} has no obs column 'sample_id'")
+        sample_ids = np.asarray(obs["sample_id"].astype(str))
+        records: list[SampleRecord] = []
+        for sample_id in sorted(set(sample_ids.tolist())):
+            if sample_id.strip() in {"", "nan", "None", "NaN"}:
+                raise ValueError(f"{source} contains a blank sample_id")
+            rows = obs.iloc[np.flatnonzero(sample_ids == sample_id)]
+            label = _canonical_label(_obs_value(rows, "Response"))
+            if label is None:
+                if require_label:
+                    continue
+                label = "UNKNOWN"
+            tissue_value = _obs_value(rows, "Tissue")
+            phase_value = _obs_value(rows, "ICI_phase")
+            if tissue is not None and "Tissue" in obs.columns and _normalise(tissue_value) != _normalise(tissue):
+                continue
+            if ici_phase is not None and "ICI_phase" in obs.columns and _normalise(phase_value) != _normalise(ici_phase):
+                continue
+            patient_id = _obs_value(rows, "patient_id") or sample_id
+            records.append(
+                SampleRecord(
+                    h5ad_path=source,
+                    metadata_path=None,
+                    patient_id=patient_id,
+                    sample_id=sample_id,
+                    dataset_id=_obs_value(rows, "dataset_id"),
+                    label=label,
+                    tissue=tissue_value,
+                    ici_phase=phase_value,
+                    cancer_type=_obs_value(rows, "Cancer type"),
+                    output_file=source.name,
+                    obs_key="sample_id",
+                )
+            )
+    finally:
+        if getattr(adata, "isbacked", False) and adata.file is not None:
+            adata.file.close()
+    if not records:
+        raise ValueError(
+            f"no usable samples in {source} (tissue={tissue!r}, ici_phase={ici_phase!r})"
+        )
+    return records
+
+
 def collect_records(
     dataset_root: str | Path,
     manifest_csv: str | Path = DEFAULT_MANIFEST,
@@ -209,8 +287,17 @@ def collect_records(
     ici_phase: str | None = "pre",
     require_label: bool = True,
 ) -> list[SampleRecord]:
-    """Load the manifest if it matches files under ``dataset_root``, else scan h5ads."""
+    """Load a sample folder, the manifest, or one integrated h5ad."""
     root = Path(dataset_root)
+    if root.is_file():
+        if root.suffix.lower() != ".h5ad":
+            raise ValueError(f"dataset_root file must be an h5ad, got {root}")
+        return records_from_integrated_h5ad(
+            root,
+            tissue=tissue,
+            ici_phase=ici_phase,
+            require_label=require_label,
+        )
     if Path(manifest_csv).is_file():
         try:
             return load_sample_manifest(
@@ -262,15 +349,20 @@ def read_gene_names(h5ad_path: Path) -> tuple[str, ...]:
             adata.file.close()
 
 
-def _item_gene_names(item: SampleData | SampleRecord) -> tuple[str, ...]:
-    if isinstance(item, SampleRecord):
-        return read_gene_names(item.h5ad_path)
-    return tuple(str(name) for name in item.gene_names)
-
-
 def build_gene_universe(items: Sequence[SampleData | SampleRecord]) -> GeneUniverse:
     """Stable gene IDs for training. Shared order is kept when every sample matches."""
-    sequences = [_item_gene_names(item) for item in items]
+    cache: dict[Path, tuple[str, ...]] = {}
+
+    def names_for(item: SampleData | SampleRecord) -> tuple[str, ...]:
+        if isinstance(item, SampleRecord):
+            cached = cache.get(item.h5ad_path)
+            if cached is None:
+                cached = read_gene_names(item.h5ad_path)
+                cache[item.h5ad_path] = cached
+            return cached
+        return tuple(str(name) for name in item.gene_names)
+
+    sequences = [names_for(item) for item in items]
     first = sequences[0]
     if all(names == first for names in sequences[1:]):
         return GeneUniverse(first)
@@ -289,11 +381,18 @@ def load_record(
     load_normalised_expression: bool = True,
     load_cell_annotation: bool = True,
     load_clinical_metadata: bool = True,
+    map_gene_symbols: bool = True,
 ) -> AnnDataSample:
-    """Load one h5ad file into the Stage 1 sample contract."""
-    import anndata as ad
+    """Load one sample into the Stage 1 contract.
 
-    adata = ad.read_h5ad(record.h5ad_path)
+    A record with ``obs_key`` is one sample inside an integrated h5ad. Other
+    records are one h5ad per sample.
+    """
+    adata = read_h5ad_sample(
+        record.h5ad_path,
+        sample_id=record.sample_id,
+        obs_key=record.obs_key,
+    )
     has_annotation = all(key in adata.obs.columns for key in CELL_ANNOTATION_KEYS) or all(
         key in adata.obs.columns for key in MAIN_CELL_TYPE_KEYS
     )
@@ -307,6 +406,7 @@ def load_record(
         load_clinical_metadata=load_clinical_metadata,
         n_hvg=n_hvg,
         hvg_names=hvg_names,
+        map_gene_symbols=map_gene_symbols,
     )
 
 
@@ -341,16 +441,59 @@ def item_cell_types(
         if label_key not in item.cell_annotation:
             raise ValueError(f"by_cell_type requires {label_key!r} on the sample")
         return _unique_labels(item.cell_annotation[label_key])
-    import anndata as ad
-
-    adata = ad.read_h5ad(item.h5ad_path, backed="r")
+    adata = read_h5ad_sample(
+        item.h5ad_path,
+        sample_id=item.sample_id,
+        obs_key=item.obs_key,
+        backed=item.obs_key is None,
+    )
     try:
         if label_key not in adata.obs.columns:
             raise ValueError(f"by_cell_type requires {label_key!r} in {item.h5ad_path}")
         return _unique_labels(adata.obs[label_key].astype(str).tolist())
     finally:
-        if adata.isbacked:
+        if getattr(adata, "isbacked", False) and adata.file is not None:
             adata.file.close()
+
+
+@dataclass(frozen=True)
+class SavedGraph:
+    """One row of a saved graph folder's ``index.json``."""
+
+    sample_id: str
+    patient_id: str
+    label: str
+    path: str
+
+    @property
+    def patient_key(self) -> str:
+        return self.patient_id
+
+
+def load_graph_index(folder: str | Path) -> list[SavedGraph]:
+    """Read the sample list written next to ``graphs/``."""
+    rows = json.loads((Path(folder) / "index.json").read_text())["graphs"]
+    return [SavedGraph(row["sample_id"], row["patient_id"], row["label"], row["path"]) for row in rows]
+
+
+class GraphFolderDataset(Dataset):
+    """Each item is a sample graph already stored in a run folder."""
+
+    def __init__(self, folder: str | Path, sample_ids: Sequence[str] | None = None):
+        graphs = load_graph_index(folder)
+        if sample_ids is not None:
+            keep = set(sample_ids)
+            graphs = [row for row in graphs if row.sample_id in keep]
+        self.graphs = graphs
+
+    def __len__(self) -> int:
+        return len(self.graphs)
+
+    def __getitem__(self, index: int) -> HeteroData:
+        return torch.load(self.graphs[index].path, weights_only=False)
+
+    def frozen_hvgs(self) -> dict[str, tuple[str, ...]]:
+        return {}
 
 
 class SampleGraphDataset(Dataset):
