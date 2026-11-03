@@ -1,97 +1,18 @@
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_1 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_1 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
-  --epochs 60 \
-  --lr 0.001 \
-  --val-fraction 0.25 \
-  --test-fraction 0.0 \
-  --no-early-stopping \
-  --threshold-strategy max_f1 \
-  --threshold 0.5 \
-  --cancer-proportional-split \
-  --split-seed 9485 \
-  --training-seed 42;
-
-python -m src.train \
-  --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_1 \
-  --encoder sage \
-  --pooling mean \
-  --readout cell \
-  --num-gnn-layers 2 \
-  --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
-  --gene-strategy expressed \
-  --n-hvg 5000 \
-  --sampling-mode random \
-  --num-cells 128 \
-  --batch-size 4 \
-  --epochs 60 \
-  --lr 0.001 \
-  --val-fraction 0.25 \
-  --test-fraction 0.0 \
-  --no-early-stopping \
-  --threshold-strategy max_f1 \
-  --threshold 0.5 \
-  --cancer-proportional-split \
-  --split-seed 9485 \
-  --training-seed 43;
-
-python -m src.train \
-  --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_1 \
-  --encoder sage \
-  --pooling mean \
-  --readout cell \
-  --num-gnn-layers 2 \
-  --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
-  --gene-strategy expressed \
-  --n-hvg 5000 \
-  --sampling-mode random \
-  --num-cells 128 \
-  --batch-size 4 \
-  --epochs 60 \
-  --lr 0.001 \
-  --val-fraction 0.25 \
-  --test-fraction 0.0 \
-  --no-early-stopping \
-  --threshold-strategy max_f1 \
-  --threshold 0.5 \
-  --cancer-proportional-split \
-  --split-seed 9485 \
-  --training-seed 44;
-
-
-python -m src.train \
-  --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_2 \
-  --encoder sage \
-  --pooling mean \
-  --readout cell \
-  --num-gnn-layers 2 \
-  --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
-  --gene-strategy expressed \
-  --n-hvg 5000 \
-  --sampling-mode random \
-  --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -101,23 +22,22 @@ python -m src.train \
   --threshold 0.5 \
   --cancer-proportional-split \
   --split-seed 1043 \
-  --training-seed 42;
-
+  --training-seed 1;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_2 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_2 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -127,23 +47,22 @@ python -m src.train \
   --threshold 0.5 \
   --cancer-proportional-split \
   --split-seed 1043 \
-  --training-seed 43;
-
+  --training-seed 2;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_2 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_3 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -153,23 +72,22 @@ python -m src.train \
   --threshold 0.5 \
   --cancer-proportional-split \
   --split-seed 1043 \
-  --training-seed 44;
-
+  --training-seed 3;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_3 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_4 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -178,24 +96,23 @@ python -m src.train \
   --threshold-strategy max_f1 \
   --threshold 0.5 \
   --cancer-proportional-split \
-  --split-seed 1045 \
-  --training-seed 42;
-
+  --split-seed 1043 \
+  --training-seed 4;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_3 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_5 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -204,24 +121,23 @@ python -m src.train \
   --threshold-strategy max_f1 \
   --threshold 0.5 \
   --cancer-proportional-split \
-  --split-seed 1045 \
-  --training-seed 43;
-
+  --split-seed 1043 \
+  --training-seed 5;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_3 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_6 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -230,24 +146,23 @@ python -m src.train \
   --threshold-strategy max_f1 \
   --threshold 0.5 \
   --cancer-proportional-split \
-  --split-seed 1045 \
-  --training-seed 44;
-
+  --split-seed 1043 \
+  --training-seed 6;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_4 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_7 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -256,24 +171,23 @@ python -m src.train \
   --threshold-strategy max_f1 \
   --threshold 0.5 \
   --cancer-proportional-split \
-  --split-seed 8173 \
-  --training-seed 42;
-
+  --split-seed 1043 \
+  --training-seed 7;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_4 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_8 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -282,24 +196,23 @@ python -m src.train \
   --threshold-strategy max_f1 \
   --threshold 0.5 \
   --cancer-proportional-split \
-  --split-seed 8173 \
-  --training-seed 43;
-
+  --split-seed 1043 \
+  --training-seed 8;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_4 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_9 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -308,24 +221,23 @@ python -m src.train \
   --threshold-strategy max_f1 \
   --threshold 0.5 \
   --cancer-proportional-split \
-  --split-seed 8173 \
-  --training-seed 44;
-
+  --split-seed 1043 \
+  --training-seed 9;
 python -m src.train \
   --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_42_split_5 \
+  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/10_seeds/1043/seed_10 \
   --encoder sage \
   --pooling mean \
   --readout cell \
-  --num-gnn-layers 2 \
+  --num-gnn-layers 3 \
   --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
+  --hidden-dim 256 \
+  --dropout 0.3 \
   --gene-strategy expressed \
   --n-hvg 5000 \
   --sampling-mode random \
   --num-cells 128 \
-  --batch-size 4 \
+  --batch-size 2 \
   --epochs 60 \
   --lr 0.001 \
   --val-fraction 0.25 \
@@ -334,57 +246,5 @@ python -m src.train \
   --threshold-strategy max_f1 \
   --threshold 0.5 \
   --cancer-proportional-split \
-  --split-seed 2873 \
-  --training-seed 42;
-
-python -m src.train \
-  --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_43_split_5 \
-  --encoder sage \
-  --pooling mean \
-  --readout cell \
-  --num-gnn-layers 2 \
-  --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
-  --gene-strategy expressed \
-  --n-hvg 5000 \
-  --sampling-mode random \
-  --num-cells 128 \
-  --batch-size 4 \
-  --epochs 60 \
-  --lr 0.001 \
-  --val-fraction 0.25 \
-  --test-fraction 0.0 \
-  --no-early-stopping \
-  --threshold-strategy max_f1 \
-  --threshold 0.5 \
-  --cancer-proportional-split \
-  --split-seed 2873 \
-  --training-seed 43;
-
-python -m src.train \
-  --dataset-root /media/rokny/DATA6/Jade/sc_training_dataset_latest/sample_h5ad/Tumor/pre \
-  --output-dir /media/rokny/DATA3/Anish/HTG_Model_ICI_Results/seeds_splits_exp/batch_size/4/seed_44_split_5 \
-  --encoder sage \
-  --pooling mean \
-  --readout cell \
-  --num-gnn-layers 2 \
-  --gat-heads 4 \
-  --hidden-dim 128 \
-  --dropout 0.1 \
-  --gene-strategy expressed \
-  --n-hvg 5000 \
-  --sampling-mode random \
-  --num-cells 128 \
-  --batch-size 4 \
-  --epochs 60 \
-  --lr 0.001 \
-  --val-fraction 0.25 \
-  --test-fraction 0.0 \
-  --no-early-stopping \
-  --threshold-strategy max_f1 \
-  --threshold 0.5 \
-  --cancer-proportional-split \
-  --split-seed 2873 \
-  --training-seed 44;
+  --split-seed 1043 \
+  --training-seed 10;
